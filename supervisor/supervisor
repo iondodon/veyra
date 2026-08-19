@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+
+"""Run the agent stored in the repository's checked-out Git commit."""
+
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+
+POLL_INTERVAL_SECONDS = 0.25
+RESTART_DELAY_SECONDS = 1.0
+STOP_TIMEOUT_SECONDS = 5.0
+
+
+class SupervisorError(RuntimeError):
+    pass
+
+
+def log(message: str) -> None:
+    print(f"[supervisor] {message}", flush=True)
+
+
+def repository_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def run_git(root: Path, *arguments: str) -> str:
+    """Run a read-only Git query and return its normalized stdout."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), *arguments],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="backslashreplace",
+        )
+    except OSError as exc:
+        raise SupervisorError(f"could not run Git: {exc}") from exc
+
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise SupervisorError(detail or "Git query failed")
+
+    return result.stdout.strip()
+
+
+def current_revision(root: Path) -> str:
+    return run_git(root, "rev-parse", "--verify", "HEAD")
+
+
+def short_revision(revision: str) -> str:
+    return revision[:12]
+
+
+def validate_agent(root: Path) -> Path:
+    """Validate the fixed agent location without following a directory link."""
+    agent = root / "agent"
+
+    if agent.is_symlink():
+        raise SupervisorError(f"agent must be a real directory: {agent}")
+    if not agent.is_dir():
+        raise SupervisorError(f"agent directory does not exist: {agent}")
+
+    start = agent / "START"
+    if not start.is_file():
+        raise SupervisorError(f"agent has no START file: {start}")
+    if not os.access(start, os.X_OK):
+        raise SupervisorError(f"START is not executable: {start}")
+
+    return agent
+
+
+def agent_changes(root: Path) -> list[str]:
+    output = run_git(
+        root,
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+        "--",
+        "agent",
+    )
+    return output.splitlines() if output else []
+
+
+def require_committed_agent(root: Path) -> None:
+    """Refuse to call an uncommitted working tree a version."""
+    try:
+        run_git(root, "ls-files", "--error-unmatch", "agent/START")
+    except SupervisorError as exc:
+        raise SupervisorError("agent/START is not tracked by Git") from exc
+
+    if agent_changes(root):
+        raise SupervisorError(
+            "agent has uncommitted changes; commit or discard them first"
+        )
+
+
+def run_self_test(agent: Path, revision: str) -> bool:
+    start = agent / "START"
+    label = short_revision(revision)
+    log(f"self-testing agent at {label}")
+
+    try:
+        result = subprocess.run([str(start), "--self-test"], cwd=agent, check=False)
+    except OSError as exc:
+        log(f"self-test could not start at {label}: {exc}")
+        return False
+
+    if result.returncode != 0:
+        log(f"self-test failed at {label} with exit code {result.returncode}")
+        return False
+
+    log(f"self-test passed at {label}")
+    return True
+
+
+def start_agent(agent: Path, revision: str) -> subprocess.Popen:
+    log(f"starting agent at {short_revision(revision)}")
+    return subprocess.Popen(
+        [str(agent / "START")],
+        cwd=agent,
+        start_new_session=True,
+    )
+
+
+def stop_agent(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+
+    log(f"stopping pid {process.pid}")
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+
+    deadline = time.monotonic() + STOP_TIMEOUT_SECONDS
+    while process.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+    if process.poll() is not None:
+        return
+
+    log(f"pid {process.pid} did not stop; killing it")
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def prepare_checked_out_agent(root: Path, revision: str) -> Path:
+    agent = validate_agent(root)
+    require_committed_agent(root)
+    if not run_self_test(agent, revision):
+        raise SupervisorError(
+            f"agent at {short_revision(revision)} failed its self-test"
+        )
+    return agent
+
+
+def main() -> int:
+    root = repository_root()
+
+    try:
+        active_revision = current_revision(root)
+        agent = prepare_checked_out_agent(root, active_revision)
+    except SupervisorError as exc:
+        log(f"startup failed: {exc}")
+        return 1
+
+    process = start_agent(agent, active_revision)
+    shutting_down = False
+    last_rejection: tuple[str, str] | None = None
+
+    def request_shutdown(signum, _frame) -> None:
+        nonlocal shutting_down
+        log(f"received signal {signum}; shutting down")
+        shutting_down = True
+
+    signal.signal(signal.SIGINT, request_shutdown)
+    signal.signal(signal.SIGTERM, request_shutdown)
+
+    try:
+        while not shutting_down:
+            try:
+                requested_revision = current_revision(root)
+            except SupervisorError as exc:
+                log(f"could not read HEAD: {exc}")
+                return 1
+
+            if requested_revision != active_revision:
+                try:
+                    candidate = prepare_checked_out_agent(root, requested_revision)
+                except SupervisorError as exc:
+                    rejection = (requested_revision, str(exc))
+                    if rejection != last_rejection:
+                        log(
+                            f"not switching to {short_revision(requested_revision)}: "
+                            f"{exc}"
+                        )
+                        last_rejection = rejection
+                else:
+                    log(
+                        "commit switch detected: "
+                        f"{short_revision(active_revision)} -> "
+                        f"{short_revision(requested_revision)}"
+                    )
+                    stop_agent(process)
+                    agent = candidate
+                    active_revision = requested_revision
+                    last_rejection = None
+                    process = start_agent(agent, active_revision)
+                    continue
+
+            if process.poll() is not None:
+                code = process.returncode
+                if requested_revision != active_revision or agent_changes(root):
+                    log(
+                        f"agent at {short_revision(active_revision)} exited with "
+                        f"code {code}, but its committed files are no longer "
+                        "checked out; select a working commit and restart"
+                    )
+                    return 1
+
+                log(
+                    f"agent at {short_revision(active_revision)} exited with "
+                    f"code {code}; restarting in {RESTART_DELAY_SECONDS:g}s"
+                )
+                time.sleep(RESTART_DELAY_SECONDS)
+                if shutting_down:
+                    break
+                process = start_agent(agent, active_revision)
+                continue
+
+            time.sleep(POLL_INTERVAL_SECONDS)
+    finally:
+        stop_agent(process)
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

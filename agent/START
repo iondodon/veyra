@@ -1,0 +1,41 @@
+#!/bin/sh
+set -eu
+
+AGENT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ROOT_DIR="$(CDPATH= cd -- "$AGENT_DIR/.." && pwd)"
+
+VENV="$ROOT_DIR/.venv"
+PYTHON="$VENV/bin/python"
+
+
+# ------------------------------------------------------------
+# Bootstrap the agent's Python environment
+# ------------------------------------------------------------
+
+if [ ! -x "$PYTHON" ]; then
+    echo "[agent] Preparing runtime..."
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "[agent] Python 3 is required." >&2
+        exit 2
+    fi
+
+    if ! python3 -m venv "$VENV"; then
+        echo "[agent] Could not create the Python environment." >&2
+        exit 2
+    fi
+
+    "$PYTHON" -m pip install \
+        --disable-pip-version-check \
+        --quiet \
+        -r "$AGENT_DIR/requirements.txt"
+
+    echo "[agent] Runtime ready."
+fi
+
+
+# ------------------------------------------------------------
+# Start the agent from the checked-out commit
+# ------------------------------------------------------------
+
+exec "$PYTHON" "$AGENT_DIR/bootstrap.py" "$@"

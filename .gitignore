@@ -1,0 +1,32 @@
+# Whitelist: ignore everything at the root...
+/*
+
+# ...except these
+!/.gitignore
+!/README.md
+!/LICENSE
+!/agent/
+!/supervisor/
+!/state/
+!/workspace/
+
+# state/: track only the directory structure
+/state/*
+!/state/conversations/
+/state/conversations/*
+!/state/conversations/.gitkeep
+!/state/evolution/
+/state/evolution/*
+!/state/evolution/.gitkeep
+!/state/memory/
+/state/memory/*
+!/state/memory/.gitkeep
+
+# workspace/: track only the placeholder
+/workspace/*
+!/workspace/.gitkeep
+
+# Never track these anywhere
+.venv/
+__pycache__/
+*.pyc
