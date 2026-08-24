@@ -11,7 +11,8 @@ import requests
 
 from providers import (
     PROVIDER_NAMES, ProviderConfigError, api_key_env_var, create_provider,
-    load_selected_provider, parse_provider_choice, save_selected_provider,
+    image_input, load_selected_provider, parse_provider_choice,
+    save_selected_provider,
 )
 
 
