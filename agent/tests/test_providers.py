@@ -1,3 +1,4 @@
+import base64
 import json
 import sys
 import tempfile
@@ -106,6 +107,18 @@ class AnthropicAdapterTests(unittest.TestCase):
             providers.user_turn("hello"),
             {"role": "user", "content": "hello"},
         )
+
+    def test_png_input_becomes_an_anthropic_image_block(self):
+        encoded = base64.b64encode(b"fake-png").decode("ascii")
+        turn = providers.user_turn([{
+            "type": "input_image",
+            "image_url": "data:image/png;base64," + encoded,
+        }])
+        self.assertEqual(turn["content"][0]["type"], "image")
+        self.assertEqual(
+            turn["content"][0]["source"]["media_type"], "image/png"
+        )
+        self.assertEqual(turn["content"][0]["source"]["data"], encoded)
 
     def test_shell_outputs_become_tool_results(self):
         turn = providers.user_turn([

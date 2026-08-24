@@ -199,6 +199,16 @@ def send_intro(owner_id: int) -> bool:
         return False
 
 
+def screenshot_paths(command: str):
+    """Return PNG paths explicitly mentioned by a screenshot command."""
+    try:
+        parts = command.split()
+        paths = [Path(part) for part in parts[1:] if part.lower().endswith(".png")]
+        return [path for path in paths if path.is_file()]
+    except (OSError, ValueError):
+        return []
+
+
 def run_local(command: str, timeout: int = 120):
     p = subprocess.run(
         command,
@@ -440,6 +450,15 @@ def main() -> int:
 
                             result = run_local(command)
                             results.append(result)
+
+                            # Make screenshots produced by an approved shell
+                            # command available to the vision-capable model,
+                            # not merely as an opaque filesystem path.
+                            for image_path in screenshot_paths(command):
+                                try:
+                                    outputs.append(image_input(image_path))
+                                except OSError:
+                                    pass
 
                             preview = (
                                 result["stdout"]

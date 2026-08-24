@@ -15,6 +15,7 @@ The provider itself is an explicit owner decision persisted with the other
 local state; it is never inferred from which API keys happen to be set.
 """
 
+import base64
 import json
 import os
 from collections import OrderedDict
@@ -163,21 +164,36 @@ def translate_tools(tools):
     return translated
 
 
+def image_input(path) -> dict:
+    """Build a provider-neutral image input from a local PNG."""
+    data = base64.b64encode(Path(path).read_bytes()).decode("ascii")
+    return {"type": "input_image", "image_url": f"data:image/png;base64,{data}"}
+
+
 def user_turn(model_input) -> dict:
     """One user turn: either chat text or shell results going back."""
     if isinstance(model_input, str):
         return {"role": "user", "content": model_input}
     results = []
     for item in model_input or []:
-        if item.get("type") != "shell_call_output":
-            raise ValueError(
-                f"Unsupported tool output type: {item.get('type')!r}"
-            )
-        results.append({
-            "type": "tool_result",
-            "tool_use_id": item["call_id"],
-            "content": json.dumps(item["output"], ensure_ascii=False),
-        })
+        item_type = item.get("type")
+        if item_type == "shell_call_output":
+            results.append({
+                "type": "tool_result",
+                "tool_use_id": item["call_id"],
+                "content": json.dumps(item["output"], ensure_ascii=False),
+            })
+        elif item_type == "input_image":
+            results.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": item["image_url"].split(",", 1)[-1],
+                },
+            })
+        else:
+            raise ValueError(f"Unsupported input type: {item_type!r}")
     return {"role": "user", "content": results}
 
 
