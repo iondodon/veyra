@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 
 import json
+import mimetypes
 import os
 import subprocess
 import sys
 import tempfile
+import shlex
 from pathlib import Path
 
 import requests
@@ -201,13 +203,42 @@ def send_intro(owner_id: int) -> bool:
 
 
 def screenshot_paths(command: str):
-    """Return PNG paths explicitly mentioned by a screenshot command."""
+    """Return image paths explicitly mentioned by a screenshot command.
+
+    Screenshot utilities commonly receive their output path as a quoted
+    argument.  Parse shell quoting rather than splitting on whitespace, while
+    deliberately limiting discovery to paths named by the approved command.
+    """
     try:
-        parts = command.split()
-        paths = [Path(part) for part in parts[1:] if part.lower().endswith(".png")]
+        parts = shlex.split(command)
+        paths = [
+            Path(part) for part in parts[1:]
+            if Path(part).suffix.lower() in {".png", ".jpg", ".jpeg"}
+        ]
         return [path for path in paths if path.is_file()]
     except (OSError, ValueError):
         return []
+
+
+def send_photo(chat_id: int, path, caption: str = ""):
+    """Upload a locally-created screenshot to the owner's Telegram chat."""
+    image = Path(path)
+    with image.open("rb") as stream:
+        response = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto",
+            data={"chat_id": chat_id, "caption": caption},
+            files={"photo": (
+                image.name,
+                stream,
+                mimetypes.guess_type(image.name)[0] or "application/octet-stream",
+            )},
+            timeout=70,
+        )
+    response.raise_for_status()
+    data = response.json()
+    if not data.get("ok"):
+        raise RuntimeError(data)
+    return data["result"]
 
 
 def run_local(command: str, timeout: int = 120):
@@ -456,6 +487,22 @@ def main() -> int:
                             # command available to the vision-capable model,
                             # not merely as an opaque filesystem path.
                             for image_path in screenshot_paths(command):
+                                # A screenshot is useful to the owner even
+                                # when the model did not request vision
+                                # analysis. Send it as a real Telegram photo,
+                                # and also provide the same bytes to the
+                                # selected model for follow-up analysis.
+                                try:
+                                    send_photo(
+                                        chat_id,
+                                        image_path,
+                                        caption=f"Screenshot: {image_path.name}",
+                                    )
+                                except Exception as exc:
+                                    send(
+                                        chat_id,
+                                        f"Could not send screenshot {image_path}: {exc}",
+                                    )
                                 try:
                                     outputs.append(image_input(image_path))
                                 except OSError:
