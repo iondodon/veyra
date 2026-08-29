@@ -123,5 +123,61 @@ class GitAgentTests(unittest.TestCase):
             supervisor.validate_agent(root)
 
 
+class SingleInstanceLockTests(unittest.TestCase):
+    """One supervisor per repository.
+
+    Two supervisors run two agents against one Telegram bot token, and
+    Telegram lets only one of them poll. Refusing the second start keeps
+    that failure visible instead of silent.
+    """
+
+    def make_root(self) -> Path:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        return Path(directory.name)
+
+    def test_lock_records_the_holding_process_under_state(self):
+        root = self.make_root()
+        descriptor = supervisor.acquire_single_instance_lock(root)
+        self.addCleanup(os.close, descriptor)
+
+        lock = root / "state" / supervisor.LOCK_FILE_NAME
+        self.assertTrue(lock.is_file())
+        self.assertEqual(lock.read_text().strip(), str(os.getpid()))
+
+    def test_second_supervisor_is_refused(self):
+        root = self.make_root()
+        descriptor = supervisor.acquire_single_instance_lock(root)
+        self.addCleanup(os.close, descriptor)
+
+        with self.assertRaisesRegex(
+            supervisor.SupervisorError, "another supervisor is already running"
+        ):
+            supervisor.acquire_single_instance_lock(root)
+
+    def test_refusal_names_the_supervisor_to_stop(self):
+        root = self.make_root()
+        descriptor = supervisor.acquire_single_instance_lock(root)
+        self.addCleanup(os.close, descriptor)
+
+        with self.assertRaisesRegex(
+            supervisor.SupervisorError, f"pid {os.getpid()}"
+        ):
+            supervisor.acquire_single_instance_lock(root)
+
+    def test_lock_is_released_when_the_supervisor_stops(self):
+        root = self.make_root()
+        os.close(supervisor.acquire_single_instance_lock(root))
+
+        descriptor = supervisor.acquire_single_instance_lock(root)
+        self.addCleanup(os.close, descriptor)
+
+    def test_separate_repositories_run_side_by_side(self):
+        first = supervisor.acquire_single_instance_lock(self.make_root())
+        self.addCleanup(os.close, first)
+        second = supervisor.acquire_single_instance_lock(self.make_root())
+        self.addCleanup(os.close, second)
+
+
 if __name__ == "__main__":
     unittest.main()

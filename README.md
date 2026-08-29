@@ -79,6 +79,8 @@ chmod +x supervisor/supervisor agent/START
 On startup the supervisor performs:
 
 ```text
+take the single-instance lock
+   ↓
 read HEAD
    ↓
 require a clean, Git-tracked agent/
@@ -91,6 +93,14 @@ watch HEAD for the next committed version
 ```
 
 You normally do not run `agent/bootstrap.py` directly.
+
+Only one Veyra may run per repository. The supervisor holds an exclusive
+lock on `state/supervisor.lock` and refuses to start while another
+supervisor holds it. Telegram serves a single `getUpdates` consumer per
+bot token: a second agent is answered with `409 Conflict`, and two pollers
+that keep retrying terminate each other's long poll until neither receives
+a message. If a running agent reports `Another Veyra is already polling
+this bot token`, stop the other one.
 
 ## Evolving the agent through chat
 

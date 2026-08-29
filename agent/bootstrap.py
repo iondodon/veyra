@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import requests
@@ -24,6 +25,12 @@ PROVIDER_FILE = STATE / "memory" / "provider.json"
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_OWNER_ID = os.environ.get("TELEGRAM_OWNER_ID", "")
+
+# Telegram serves exactly one getUpdates consumer per bot token and
+# answers every other poller with 409 Conflict. Two pollers that retry
+# immediately terminate each other's long poll, so neither ever receives
+# a message. Wait instead of hammering.
+POLLING_CONFLICT_BACKOFF = 5
 
 SHELL_TOOLS = [
     {
@@ -131,6 +138,12 @@ def self_test() -> int:
     }))
 
     return 0
+
+
+def is_polling_conflict(exc) -> bool:
+    """Tell Telegram's one-consumer-per-token conflict from other errors."""
+    response = getattr(exc, "response", None)
+    return getattr(response, "status_code", None) == 409
 
 
 def tg(method: str, **payload):
@@ -270,6 +283,7 @@ def main() -> int:
     previous_response_id = None
     pending = None
     offset = None
+    polling_conflict = False
 
     def provider_status() -> str:
         available = [
@@ -329,6 +343,14 @@ def main() -> int:
                 "getUpdates",
                 **args,
             )
+
+            if polling_conflict:
+                polling_conflict = False
+                print(
+                    "Telegram polling resumed; this Veyra is the only "
+                    "consumer of the bot token again.",
+                    file=sys.stderr,
+                )
 
             for update in updates:
                 offset = update["update_id"] + 1
@@ -527,6 +549,27 @@ def main() -> int:
 
         except KeyboardInterrupt:
             return 0
+
+        except requests.HTTPError as exc:
+            # Report the one-consumer conflict once, in words the owner
+            # can act on, and never echo the request URL: it carries the
+            # bot token.
+            if is_polling_conflict(exc):
+                if not polling_conflict:
+                    polling_conflict = True
+                    print(
+                        "Another Veyra is already polling this bot "
+                        "token; stop it first.",
+                        file=sys.stderr,
+                    )
+
+                time.sleep(POLLING_CONFLICT_BACKOFF)
+                continue
+
+            print(
+                f"Agent error: {exc}",
+                file=sys.stderr,
+            )
 
         except Exception as exc:
             print(

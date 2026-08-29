@@ -2,6 +2,7 @@
 
 """Run the agent stored in the repository's checked-out Git commit."""
 
+import fcntl
 import os
 import signal
 import subprocess
@@ -13,6 +14,7 @@ from pathlib import Path
 POLL_INTERVAL_SECONDS = 0.25
 RESTART_DELAY_SECONDS = 1.0
 STOP_TIMEOUT_SECONDS = 5.0
+LOCK_FILE_NAME = "supervisor.lock"
 
 
 class SupervisorError(RuntimeError):
@@ -54,6 +56,53 @@ def current_revision(root: Path) -> str:
 
 def short_revision(revision: str) -> str:
     return revision[:12]
+
+
+def read_lock_holder(descriptor: int) -> str:
+    """Read the process ID recorded by the supervisor holding the lock."""
+    try:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        recorded = os.read(descriptor, 32).decode("utf-8", "replace").strip()
+    except OSError:
+        return ""
+    return recorded if recorded.isdigit() else ""
+
+
+def acquire_single_instance_lock(root: Path) -> int:
+    """Allow only one supervisor per repository.
+
+    Two supervisors mean two agents polling the same Telegram bot token.
+    Telegram serves a single getUpdates consumer and answers the rest
+    with 409 Conflict, so two pollers that keep retrying starve each
+    other and neither receives a message. Refuse the second start
+    instead of failing silently.
+
+    The returned descriptor must stay open for as long as the supervisor
+    runs; the kernel releases the lock when the process exits.
+    """
+    state = root / "state"
+    path = state / LOCK_FILE_NAME
+
+    try:
+        state.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError as exc:
+        raise SupervisorError(f"could not open {path}: {exc}") from exc
+
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        holder = read_lock_holder(descriptor)
+        os.close(descriptor)
+        raise SupervisorError(
+            "another supervisor is already running for this repository"
+            + (f" (pid {holder})" if holder else "")
+            + "; stop it before starting a new one"
+        ) from None
+
+    os.ftruncate(descriptor, 0)
+    os.write(descriptor, f"{os.getpid()}\n".encode())
+    return descriptor
 
 
 def validate_agent(root: Path) -> Path:
@@ -170,6 +219,7 @@ def main() -> int:
     root = repository_root()
 
     try:
+        lock = acquire_single_instance_lock(root)
         active_revision = current_revision(root)
         agent = prepare_checked_out_agent(root, active_revision)
     except SupervisorError as exc:
@@ -243,6 +293,7 @@ def main() -> int:
             time.sleep(POLL_INTERVAL_SECONDS)
     finally:
         stop_agent(process)
+        os.close(lock)
 
     return 0
 
