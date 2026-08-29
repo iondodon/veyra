@@ -77,5 +77,19 @@ class MemoryWiringTests(unittest.TestCase):
         self.assertIn("version changes", bootstrap.INTRO)
 
 
+class OperationalKnowledgeTests(unittest.TestCase):
+    def test_versioned_operational_notes_are_always_in_instructions(self):
+        rendered = bootstrap.load_instructions()
+        self.assertIn("# Versioned operational memory", rendered)
+        self.assertIn("Selecting a tab in Ghostty", rendered)
+        self.assertIn("wtype -s 150 -M alt -k 2 -m alt -s 300", rendered)
+
+    def test_operational_notes_are_agent_code_not_ephemeral_workspace(self):
+        self.assertEqual(
+            bootstrap.OPERATIONAL_NOTES,
+            bootstrap.AGENT_DIR / "operational_notes.md",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

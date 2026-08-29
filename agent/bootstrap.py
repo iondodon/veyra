@@ -30,6 +30,7 @@ STATE = ROOT / "state"
 WORKSPACE = ROOT / "workspace"
 AGENT_DIR = Path(__file__).resolve().parent
 PROMPT = AGENT_DIR / "initial_prompt.md"
+OPERATIONAL_NOTES = AGENT_DIR / "operational_notes.md"
 PROVIDER_FILE = STATE / "memory" / "provider.json"
 MODEL_FILE = STATE / "memory" / "models.json"
 CONVERSATION_FILE = STATE / "memory" / "recent_messages.json"
@@ -77,8 +78,16 @@ COMMIT_ID = current_commit()
 
 
 def load_instructions() -> str:
-    return PROMPT.read_text(encoding="utf-8").replace(
+    instructions = PROMPT.read_text(encoding="utf-8").replace(
         "{{COMMIT_ID}}", COMMIT_ID
+    )
+    operational_notes = OPERATIONAL_NOTES.read_text(encoding="utf-8")
+    return (
+        instructions
+        + "\n\n# Versioned operational memory\n"
+        + "The following notes preserve techniques learned on this "
+          "computer for use in future conversations and versions.\n\n"
+        + operational_notes
     )
 
 
@@ -109,6 +118,7 @@ def self_test() -> int:
         STATE,
         WORKSPACE,
         PROMPT,
+        OPERATIONAL_NOTES,
         Path(__file__).with_name("providers.py"),
     ]
 
