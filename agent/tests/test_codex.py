@@ -47,10 +47,42 @@ class CodexBridgeTests(unittest.TestCase):
 
         self.assertEqual(window, 7)
         self.assertEqual(observed[1][0][-3:], ["focus-window", "--id", "7"])
-        self.assertEqual(observed[2][0][0], "/usr/bin/wtype")
+        self.assertEqual(
+            observed[2][0],
+            ["/usr/bin/wtype", "-s", "150", "-d", "25", "-", "-s", "300"],
+        )
         self.assertEqual(observed[2][1]["input"], "fix the tests; echo $HOME")
         self.assertNotIn("Return", observed[2][0])
         self.assertFalse(any("exec" in command for command, kwargs in observed))
+
+    def test_slash_command_is_typed_slowly_and_left_visible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = Path(tmp)
+            add_process(proc, 100, 1, ["ghostty"], tty=0)
+            add_process(proc, 200, 100, ["codex", "resume"])
+            observed = []
+
+            def runner(command, **kwargs):
+                observed.append((command, kwargs))
+                if command[-2:] == ["--json", "windows"]:
+                    return SimpleNamespace(
+                        returncode=0,
+                        stdout=json.dumps([{"id": 7, "pid": 100, "is_focused": True}]),
+                        stderr="",
+                    )
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            bootstrap.stage_prompt_in_open_codex(
+                "/status",
+                which=lambda name: "/usr/bin/" + name,
+                runner=runner,
+                proc_root=proc,
+            )
+
+        self.assertEqual(observed[2][1]["input"], "/status")
+        self.assertEqual(observed[2][0][3:5], ["-d", "25"])
+        self.assertEqual(observed[2][0][-2:], ["-s", "300"])
+        self.assertNotIn("Return", observed[2][0])
 
     def test_focused_window_wins_when_multiple_codex_sessions_exist(self):
         with tempfile.TemporaryDirectory() as tmp:

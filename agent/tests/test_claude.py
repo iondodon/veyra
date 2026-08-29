@@ -46,7 +46,10 @@ class ClaudeBridgeTests(unittest.TestCase):
 
         self.assertEqual(window, 9)
         self.assertEqual(observed[1][0][-3:], ["focus-window", "--id", "9"])
-        self.assertEqual(observed[2][0][0], "/usr/bin/wtype")
+        self.assertEqual(
+            observed[2][0],
+            ["/usr/bin/wtype", "-s", "150", "-d", "25", "-", "-s", "300"],
+        )
         self.assertEqual(observed[2][1]["input"], "review this; echo $HOME")
         self.assertNotIn("Return", observed[2][0])
         self.assertFalse(any("exec" in command for command, kwargs in observed))

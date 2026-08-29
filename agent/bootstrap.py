@@ -571,9 +571,11 @@ def stage_prompt_in_open_codex(prompt: str, which=shutil.which,
         if focused.returncode != 0:
             raise CodexError("Could not focus the open Codex terminal.")
         # stdin keeps arbitrary prompt text out of shell parsing and safely
-        # handles text beginning with '-'. A brief pause lets focus settle.
+        # handles text beginning with '-'. Pause for focus, type at a pace the
+        # TUI can render (especially its slash-command menu), then let the final
+        # frame settle before the caller captures the approval screenshot.
         typed = runner(
-            [wtype, "-s", "150", "-"],
+            [wtype, "-s", "150", "-d", "25", "-", "-s", "300"],
             input=prompt, capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=30,
         )
@@ -703,8 +705,10 @@ def stage_prompt_in_open_claude(prompt: str, which=shutil.which,
         )
         if focused.returncode != 0:
             raise ClaudeError("Could not focus the open Claude terminal.")
+        # Delayed keystrokes and a final pause keep slash commands visible in
+        # the TUI before the approval screenshot is captured.
         typed = runner(
-            [wtype, "-s", "150", "-"],
+            [wtype, "-s", "150", "-d", "25", "-", "-s", "300"],
             input=prompt, capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=30,
         )
