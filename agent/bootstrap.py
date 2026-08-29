@@ -30,7 +30,6 @@ AGENT_DIR = Path(__file__).resolve().parent
 PROMPT = AGENT_DIR / "initial_prompt.md"
 PROVIDER_FILE = STATE / "memory" / "provider.json"
 CONVERSATION_FILE = STATE / "memory" / "recent_messages.json"
-CODEX_TIMEOUT = 1800
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_OWNER_ID = os.environ.get("TELEGRAM_OWNER_ID", "")
@@ -86,7 +85,7 @@ The model provider is your explicit choice: select or switch it with `/provider 
 The selection is remembered across restarts, and nothing runs on a provider you did not choose.
 I also remember the last 20 owner and assistant messages across restarts and version changes.
 Send `/screenshot` whenever you want a current full-screen image.
-Send `/codex your prompt` to run a prompt through the local Codex CLI in `workspace/`.
+Send `/codex your prompt` to type it into the interactive Codex CLI already open in a terminal.
 As a stating point only OpenAI and Anthropic providers are supported.
 
 What should I become?"""
@@ -442,77 +441,146 @@ def send_photo(chat_id: int, path, caption: str = ""):
 
 
 class CodexError(RuntimeError):
-    """A local Codex invocation could not produce an answer."""
+    """A prompt could not be delivered to the open Codex terminal."""
 
 
-def codex_command(executable: str, output_path: Path) -> list[str]:
-    """Build the constrained, non-interactive Codex CLI command."""
-    return [
-        executable,
-        "exec",
-        "--sandbox", "workspace-write",
-        "--cd", str(WORKSPACE),
-        "--skip-git-repo-check",
-        "--color", "never",
-        "--output-last-message", str(output_path),
-        "-",
-    ]
+def _process_info(path: Path):
+    """Return (parent pid, has_tty, argv), tolerating vanishing /proc rows."""
+    try:
+        stat = (path / "stat").read_text(encoding="utf-8")
+        # The command name is parenthesized and may itself contain spaces.
+        fields = stat.rsplit(")", 1)[1].split()
+        parent_pid = int(fields[1])
+        has_tty = int(fields[4]) != 0
+        argv = [part.decode("utf-8", "replace") for part in
+                (path / "cmdline").read_bytes().split(b"\0") if part]
+        return parent_pid, has_tty, argv
+    except (OSError, ValueError, IndexError):
+        return None
 
 
-def run_codex(prompt: str, timeout: int = CODEX_TIMEOUT, which=shutil.which,
-              runner=subprocess.run) -> str:
-    """Send *prompt* to local Codex and return only its final response.
+def _is_interactive_codex(argv: list[str], has_tty: bool) -> bool:
+    if not has_tty or not argv:
+        return False
+    # npm's launcher is `node .../bin/codex`; the native launcher has codex as
+    # argv[0]. Both remain attached to the terminal hosting the TUI.
+    return any(Path(argument).name == "codex" for argument in argv[:2])
 
-    The prompt is supplied over stdin rather than interpolated into a shell
-    command. Codex starts in the dedicated workspace with its own
-    ``workspace-write`` sandbox; this bridge never disables its sandbox or
-    approval controls.
-    """
+
+def find_open_codex_window(windows: list[dict], proc_root: Path = Path("/proc")) -> int:
+    """Find the compositor window containing an interactive Codex process."""
+    window_pids = {
+        int(window["pid"]): window for window in windows
+        if isinstance(window, dict) and window.get("pid") is not None
+    }
+    process_table = {}
+    try:
+        process_paths = list(proc_root.iterdir())
+    except OSError as exc:
+        raise CodexError(f"Could not inspect running applications: {exc}") from exc
+
+    codex_pids = []
+    for path in process_paths:
+        if not path.name.isdigit():
+            continue
+        info = _process_info(path)
+        if info is None:
+            continue
+        pid = int(path.name)
+        process_table[pid] = info
+        if _is_interactive_codex(info[2], info[1]):
+            codex_pids.append(pid)
+
+    matches = {}
+    for pid in codex_pids:
+        visited = set()
+        while pid and pid not in visited:
+            visited.add(pid)
+            if pid in window_pids:
+                matches[pid] = window_pids[pid]
+                break
+            info = process_table.get(pid)
+            if info is None:
+                info = _process_info(proc_root / str(pid))
+                if info is None:
+                    break
+                process_table[pid] = info
+            pid = info[0]
+
+    if not matches:
+        raise CodexError(
+            "No open interactive Codex terminal was found. Open Codex in a "
+            "terminal first, then try again."
+        )
+    if len(matches) == 1:
+        return int(next(iter(matches.values()))["id"])
+
+    focused = [window for window in matches.values() if window.get("is_focused")]
+    if len(focused) == 1:
+        return int(focused[0]["id"])
+    raise CodexError(
+        "More than one Codex terminal is open. Focus the intended one and try again."
+    )
+
+
+def send_prompt_to_open_codex(prompt: str, which=shutil.which,
+                              runner=subprocess.run,
+                              proc_root: Path = Path("/proc")) -> int:
+    """Focus the existing Codex terminal, type *prompt*, and press Enter."""
     prompt = prompt.strip()
     if not prompt:
         raise CodexError("A prompt is required. Use /codex followed by your prompt.")
 
-    executable = os.environ.get("CODEX_BIN") or which("codex")
-    if not executable:
-        raise CodexError("The Codex CLI is not installed or is not on PATH.")
+    niri = which("niri")
+    wtype = which("wtype")
+    if not niri or not wtype:
+        raise CodexError(
+            "Desktop input support is unavailable (both niri and wtype are required)."
+        )
 
-    WORKSPACE.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="veyra-codex-") as directory:
-        output_path = Path(directory) / "last-message.txt"
-        try:
-            result = runner(
-                codex_command(executable, output_path),
-                input=prompt,
-                cwd=WORKSPACE,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="backslashreplace",
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise CodexError(
-                f"Codex did not finish within {timeout // 60} minutes."
-            ) from exc
-        except OSError as exc:
-            raise CodexError(f"Could not start Codex: {exc}") from exc
+    try:
+        listed = runner(
+            [niri, "msg", "--json", "windows"], capture_output=True,
+            text=True, encoding="utf-8", errors="replace", timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise CodexError(f"Could not inspect open windows: {exc}") from exc
+    if listed.returncode != 0:
+        detail = (listed.stderr or listed.stdout or "").strip()
+        raise CodexError("Could not inspect open windows" +
+                         (f": {detail}" if detail else "."))
+    try:
+        windows = json.loads(listed.stdout)
+        if not isinstance(windows, list):
+            raise ValueError("window list is not an array")
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise CodexError("The desktop returned an invalid window list.") from exc
 
-        if result.returncode != 0:
-            detail = (result.stderr or result.stdout or "").strip()
-            if len(detail) > 1200:
-                detail = detail[-1200:]
-            raise CodexError(
-                "Codex failed" + (f": {detail}" if detail else
-                                    f" with exit status {result.returncode}.")
-            )
-
-        try:
-            answer = output_path.read_text(encoding="utf-8").strip()
-        except OSError:
-            answer = ""
-        if not answer:
-            raise CodexError("Codex finished without a final response.")
-        return answer
+    window_id = find_open_codex_window(windows, proc_root)
+    try:
+        focused = runner(
+            [niri, "msg", "action", "focus-window", "--id", str(window_id)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=10,
+        )
+        if focused.returncode != 0:
+            raise CodexError("Could not focus the open Codex terminal.")
+        # stdin keeps arbitrary prompt text out of shell parsing and safely
+        # handles text beginning with '-'. A brief pause lets focus settle.
+        typed = runner(
+            [wtype, "-s", "150", "-", "-s", "75", "-k", "Return"],
+            input=prompt, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=30,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CodexError("Desktop input timed out while sending the prompt.") from exc
+    except OSError as exc:
+        raise CodexError(f"Could not send desktop input: {exc}") from exc
+    if typed.returncode != 0:
+        detail = (typed.stderr or typed.stdout or "").strip()
+        raise CodexError("Could not type into Codex" +
+                         (f": {detail}" if detail else "."))
+    return window_id
 
 
 def run_local(command: str, timeout: int = 120):
@@ -715,25 +783,20 @@ def main() -> int:
                 if text == "/codex":
                     send(
                         chat_id,
-                        "Use /codex followed by a prompt. Codex runs in "
-                        "the workspace/ directory with workspace-write sandboxing.",
+                        "Use /codex followed by a prompt. I will type it into "
+                        "the interactive Codex CLI already open in a terminal.",
                     )
                     continue
 
                 if text.startswith("/codex "):
                     prompt = text.split(maxsplit=1)[1]
+                    send(chat_id, "Sending prompt to the open Codex session…")
                     try:
-                        answer = run_with_thinking(
-                            lambda: run_codex(prompt),
-                            chat_id,
-                            lambda elapsed: send(
-                                chat_id, progress_text(elapsed)
-                            ),
-                        )
+                        send_prompt_to_open_codex(prompt)
                     except Exception as exc:
-                        send(chat_id, f"Could not run Codex: {exc}")
+                        send(chat_id, f"Could not send prompt to Codex: {exc}")
                     else:
-                        send(chat_id, answer)
+                        send(chat_id, "Prompt sent to the open Codex session.")
                     continue
 
                 # ------------------------------------------------
