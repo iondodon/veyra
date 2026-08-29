@@ -16,6 +16,7 @@ from pathlib import Path
 
 import requests
 
+from completion_monitor import CompletionMonitor
 from memory import DEFAULT_MESSAGE_LIMIT, RecentConversation
 from providers import (
     PROVIDER_NAMES, ProviderConfigError, api_key_env_var, create_provider,
@@ -34,6 +35,7 @@ OPERATIONAL_NOTES = AGENT_DIR / "operational_notes.md"
 PROVIDER_FILE = STATE / "memory" / "provider.json"
 MODEL_FILE = STATE / "memory" / "models.json"
 CONVERSATION_FILE = STATE / "memory" / "recent_messages.json"
+CLI_NOTIFICATION_FILE = STATE / "memory" / "cli_notifications.json"
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_OWNER_ID = os.environ.get("TELEGRAM_OWNER_ID", "")
@@ -104,10 +106,32 @@ The selection is remembered across restarts, and nothing runs on a provider you 
 I also remember the last 20 owner and assistant messages across restarts and version changes.
 Send `/screenshot` whenever you want a current full-screen image.
 Send `/codex your prompt` or `/claude your prompt` to stage text in an open CLI. I will show a screenshot and wait for your approval before submitting it.
+Use `/codex_claude_notify on` to receive Telegram notifications when either CLI finishes a turn.
+Send `/help` to see every available command.
 Use `/model MODEL_ID` to change the model at runtime without creating a new version.
 As a stating point only OpenAI and Anthropic providers are supported.
 
 What should I become?"""
+
+
+HELP_TEXT = """Veyra commands:
+
+/help — show this command list
+/screenshot — send a current full-screen image
+/codex PROMPT — stage a prompt in an open Codex CLI for approval
+/claude PROMPT — stage a prompt in an open Claude CLI for approval
+/codex_claude_notify on — notify when Codex or Claude finishes a turn
+/codex_claude_notify off — stop completion notifications
+/codex_claude_notify status — show notification status
+/provider — show the selected model provider
+/provider openai|anthropic — select a provider
+/model — show the current model
+/model MODEL_ID — change the current model
+/approve — approve a pending local shell request
+/deny — deny a pending local shell request
+/start — show the introduction
+
+Any other message is sent to Veyra as a normal request."""
 
 
 def self_test() -> int:
@@ -120,6 +144,7 @@ def self_test() -> int:
         PROMPT,
         OPERATIONAL_NOTES,
         Path(__file__).with_name("providers.py"),
+        Path(__file__).with_name("completion_monitor.py"),
     ]
 
     missing = [str(p) for p in required if not p.exists()]
@@ -871,6 +896,10 @@ def main() -> int:
     offset = None
     polling_conflict = False
     active_instructions = instructions
+    completion_monitor = CompletionMonitor(
+        CLI_NOTIFICATION_FILE,
+        lambda notice: send(owner_id, notice),
+    )
 
     def provider_status() -> str:
         available = [
@@ -926,6 +955,8 @@ def main() -> int:
                 f"Could not send provider notice: {exc}",
                 file=sys.stderr,
             )
+
+    completion_monitor.start()
 
     # --------------------------------------------------------
     # Telegram loop
@@ -1016,6 +1047,36 @@ def main() -> int:
 
                 if text == "/start":
                     send(chat_id, INTRO)
+                    continue
+
+                if text == "/help":
+                    send(chat_id, HELP_TEXT)
+                    continue
+
+                if text == "/codex_claude_notify":
+                    send(
+                        chat_id,
+                        completion_monitor.status_text() + "\n"
+                        "Use /codex_claude_notify on, off, or status.",
+                    )
+                    continue
+
+                if text.startswith("/codex_claude_notify "):
+                    choice = text.split(maxsplit=1)[1].strip().lower()
+                    if choice == "status":
+                        send(chat_id, completion_monitor.status_text())
+                    elif choice in {"on", "off"}:
+                        enabled = choice == "on"
+                        changed = completion_monitor.set_enabled(enabled)
+                        message = completion_monitor.status_text()
+                        if not changed:
+                            message = message[:-1] + " already."
+                        send(chat_id, message)
+                    else:
+                        send(
+                            chat_id,
+                            "Use /codex_claude_notify on, off, or status.",
+                        )
                     continue
 
                 # ------------------------------------------------
