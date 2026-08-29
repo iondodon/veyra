@@ -736,9 +736,14 @@ def act_on_staged_prompt(window_id: int, submit: bool, which=shutil.which,
         )
         if focused.returncode != 0:
             raise RuntimeError("Could not focus the CLI terminal.")
+        # Both Codex and Claude Code define Ctrl+C as cancelling a non-empty
+        # editor input.  Ctrl+A followed by Backspace is not reliable here:
+        # terminal editors commonly interpret Ctrl+A as “move to start”, which
+        # leaves almost the entire staged prompt behind.  Since cancellation is
+        # only offered while staged text is present, one Ctrl+C clears the input
+        # without triggering the CLIs' empty-input/second-Ctrl+C exit behavior.
         action = ([wtype, "-k", "Return"] if submit else
-                  [wtype, "-M", "ctrl", "-k", "a", "-m", "ctrl",
-                   "-k", "BackSpace"])
+                  [wtype, "-M", "ctrl", "-k", "c", "-m", "ctrl"])
         result = runner(
             action, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=10,

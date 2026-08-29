@@ -114,8 +114,11 @@ class StagedPromptApprovalTests(unittest.TestCase):
         bootstrap.act_on_staged_prompt(
             17, False, which=lambda name: "/usr/bin/" + name, runner=runner
         )
-        self.assertIn("ctrl", observed[1])
-        self.assertEqual(observed[1][-2:], ["-k", "BackSpace"])
+        self.assertEqual(
+            observed[1],
+            ["/usr/bin/wtype", "-M", "ctrl", "-k", "c", "-m", "ctrl"],
+        )
+        self.assertNotIn("BackSpace", observed[1])
         self.assertFalse(any("Return" in command for command in observed))
 
     def test_telegram_workflow_has_screenshot_and_approval_buttons(self):
