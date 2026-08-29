@@ -26,7 +26,7 @@ PROVIDER_OPENAI = "openai"
 PROVIDER_ANTHROPIC = "anthropic"
 PROVIDER_NAMES = (PROVIDER_OPENAI, PROVIDER_ANTHROPIC)
 
-DEFAULT_OPENAI_MODEL = "gpt-5.6-sol"
+DEFAULT_OPENAI_MODEL = "gpt-5.6-luna"
 DEFAULT_ANTHROPIC_MODEL = "claude-opus-5"
 
 # Server-side refusal fallbacks exist only for these Claude model families.
