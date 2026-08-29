@@ -30,6 +30,7 @@ AGENT_DIR = Path(__file__).resolve().parent
 PROMPT = AGENT_DIR / "initial_prompt.md"
 PROVIDER_FILE = STATE / "memory" / "provider.json"
 CONVERSATION_FILE = STATE / "memory" / "recent_messages.json"
+CODEX_TIMEOUT = 1800
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_OWNER_ID = os.environ.get("TELEGRAM_OWNER_ID", "")
@@ -85,6 +86,7 @@ The model provider is your explicit choice: select or switch it with `/provider 
 The selection is remembered across restarts, and nothing runs on a provider you did not choose.
 I also remember the last 20 owner and assistant messages across restarts and version changes.
 Send `/screenshot` whenever you want a current full-screen image.
+Send `/codex your prompt` to run a prompt through the local Codex CLI in `workspace/`.
 As a stating point only OpenAI and Anthropic providers are supported.
 
 What should I become?"""
@@ -439,6 +441,80 @@ def send_photo(chat_id: int, path, caption: str = ""):
     return data["result"]
 
 
+class CodexError(RuntimeError):
+    """A local Codex invocation could not produce an answer."""
+
+
+def codex_command(executable: str, output_path: Path) -> list[str]:
+    """Build the constrained, non-interactive Codex CLI command."""
+    return [
+        executable,
+        "exec",
+        "--sandbox", "workspace-write",
+        "--cd", str(WORKSPACE),
+        "--skip-git-repo-check",
+        "--color", "never",
+        "--output-last-message", str(output_path),
+        "-",
+    ]
+
+
+def run_codex(prompt: str, timeout: int = CODEX_TIMEOUT, which=shutil.which,
+              runner=subprocess.run) -> str:
+    """Send *prompt* to local Codex and return only its final response.
+
+    The prompt is supplied over stdin rather than interpolated into a shell
+    command. Codex starts in the dedicated workspace with its own
+    ``workspace-write`` sandbox; this bridge never disables its sandbox or
+    approval controls.
+    """
+    prompt = prompt.strip()
+    if not prompt:
+        raise CodexError("A prompt is required. Use /codex followed by your prompt.")
+
+    executable = os.environ.get("CODEX_BIN") or which("codex")
+    if not executable:
+        raise CodexError("The Codex CLI is not installed or is not on PATH.")
+
+    WORKSPACE.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="veyra-codex-") as directory:
+        output_path = Path(directory) / "last-message.txt"
+        try:
+            result = runner(
+                codex_command(executable, output_path),
+                input=prompt,
+                cwd=WORKSPACE,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="backslashreplace",
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise CodexError(
+                f"Codex did not finish within {timeout // 60} minutes."
+            ) from exc
+        except OSError as exc:
+            raise CodexError(f"Could not start Codex: {exc}") from exc
+
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            if len(detail) > 1200:
+                detail = detail[-1200:]
+            raise CodexError(
+                "Codex failed" + (f": {detail}" if detail else
+                                    f" with exit status {result.returncode}.")
+            )
+
+        try:
+            answer = output_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            answer = ""
+        if not answer:
+            raise CodexError("Codex finished without a final response.")
+        return answer
+
+
 def run_local(command: str, timeout: int = 120):
     p = subprocess.run(
         command,
@@ -630,6 +706,34 @@ def main() -> int:
                         )
                     except Exception as exc:
                         send(chat_id, f"Could not take screenshot: {exc}")
+                    continue
+
+                # ------------------------------------------------
+                # Direct local Codex prompt
+                # ------------------------------------------------
+
+                if text == "/codex":
+                    send(
+                        chat_id,
+                        "Use /codex followed by a prompt. Codex runs in "
+                        "the workspace/ directory with workspace-write sandboxing.",
+                    )
+                    continue
+
+                if text.startswith("/codex "):
+                    prompt = text.split(maxsplit=1)[1]
+                    try:
+                        answer = run_with_thinking(
+                            lambda: run_codex(prompt),
+                            chat_id,
+                            lambda elapsed: send(
+                                chat_id, progress_text(elapsed)
+                            ),
+                        )
+                    except Exception as exc:
+                        send(chat_id, f"Could not run Codex: {exc}")
+                    else:
+                        send(chat_id, answer)
                     continue
 
                 # ------------------------------------------------
