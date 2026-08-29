@@ -5,6 +5,7 @@ import mimetypes
 import os
 import queue
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -83,6 +84,7 @@ Describe the next version you want me to build.
 The model provider is your explicit choice: select or switch it with `/provider openai` or `/provider anthropic`. 
 The selection is remembered across restarts, and nothing runs on a provider you did not choose.
 I also remember the last 20 owner and assistant messages across restarts and version changes.
+Send `/screenshot` whenever you want a current full-screen image.
 As a stating point only OpenAI and Anthropic providers are supported.
 
 What should I become?"""
@@ -186,6 +188,16 @@ def send(chat_id: int, text: str):
             chat_id=chat_id,
             text=text[i:i + 3500] or " ",
         )
+
+
+def send_uploading_photo(chat_id: int):
+    """Show Telegram that a requested screenshot is being prepared."""
+    return tg(
+        "sendChatAction",
+        request_timeout=10,
+        chat_id=chat_id,
+        action="upload_photo",
+    )
 
 
 def send_typing(chat_id: int):
@@ -292,6 +304,64 @@ def send_intro(owner_id: int) -> bool:
             file=sys.stderr,
         )
         return False
+
+
+def capture_screen(path, which=shutil.which, runner=subprocess.run):
+    """Capture the current full desktop into *path*.
+
+    Prefer native Wayland capture, then try common desktop/X11 utilities. The
+    command is run without a shell and the destination is fixed by Veyra.
+    """
+    destination = Path(path)
+    candidates = [
+        ("grim", ["grim", str(destination)]),
+        ("gnome-screenshot", ["gnome-screenshot", "-f", str(destination)]),
+        ("spectacle", ["spectacle", "-b", "-n", "-o", str(destination)]),
+        ("scrot", ["scrot", str(destination)]),
+        ("import", ["import", "-window", "root", str(destination)]),
+    ]
+    failures = []
+
+    for executable, command in candidates:
+        resolved = which(executable)
+        if not resolved:
+            continue
+        command[0] = resolved
+        try:
+            result = runner(
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="backslashreplace",
+                timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            failures.append(f"{executable}: {exc}")
+            continue
+
+        if (result.returncode == 0 and destination.is_file()
+                and destination.stat().st_size > 0):
+            return destination
+
+        detail = (result.stderr or result.stdout or
+                  f"exit status {result.returncode}").strip()
+        failures.append(f"{executable}: {detail}")
+        destination.unlink(missing_ok=True)
+
+    if not failures:
+        raise RuntimeError(
+            "No supported screenshot utility is installed "
+            "(tried grim, gnome-screenshot, spectacle, scrot, and import)."
+        )
+    raise RuntimeError("Screen capture failed: " + "; ".join(failures))
+
+
+def capture_and_send_screenshot(chat_id: int):
+    """Capture a transient screenshot and upload it only to the owner chat."""
+    with tempfile.TemporaryDirectory(prefix="veyra-screenshot-") as directory:
+        image = capture_screen(Path(directory) / "screen.png")
+        return send_photo(chat_id, image, caption="Current screen")
 
 
 def screenshot_paths(command: str):
@@ -507,6 +577,23 @@ def main() -> int:
 
                 if text == "/start":
                     send(chat_id, INTRO)
+                    continue
+
+                # ------------------------------------------------
+                # Owner-requested full-screen capture
+                # ------------------------------------------------
+
+                if text == "/screenshot":
+                    try:
+                        run_with_progress(
+                            lambda: capture_and_send_screenshot(chat_id),
+                            lambda elapsed: send(
+                                chat_id, progress_text(elapsed)
+                            ),
+                            activity=lambda: send_uploading_photo(chat_id),
+                        )
+                    except Exception as exc:
+                        send(chat_id, f"Could not take screenshot: {exc}")
                     continue
 
                 # ------------------------------------------------
