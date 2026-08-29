@@ -68,7 +68,7 @@ class ProviderSelectionTests(unittest.TestCase):
             "openai", {"OPENAI_API_KEY": "k"}
         )
         self.assertEqual(openai_provider.name, "openai")
-        self.assertEqual(openai_provider.model, "gpt-5.6-luna")
+        self.assertEqual(openai_provider.model, "gpt-5.6-sol")
         anthropic_provider = providers.create_provider(
             "anthropic", {"ANTHROPIC_API_KEY": "k"}
         )
