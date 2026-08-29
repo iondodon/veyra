@@ -14,6 +14,7 @@ from pathlib import Path
 
 import requests
 
+from memory import DEFAULT_MESSAGE_LIMIT, RecentConversation
 from providers import (
     PROVIDER_NAMES, ProviderConfigError, api_key_env_var, create_provider,
     image_input, load_selected_provider, parse_provider_choice,
@@ -27,6 +28,7 @@ WORKSPACE = ROOT / "workspace"
 AGENT_DIR = Path(__file__).resolve().parent
 PROMPT = AGENT_DIR / "initial_prompt.md"
 PROVIDER_FILE = STATE / "memory" / "provider.json"
+CONVERSATION_FILE = STATE / "memory" / "recent_messages.json"
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_OWNER_ID = os.environ.get("TELEGRAM_OWNER_ID", "")
@@ -79,6 +81,7 @@ Describe the next version you want me to build.
 
 The model provider is your explicit choice: select or switch it with `/provider openai` or `/provider anthropic`. 
 The selection is remembered across restarts, and nothing runs on a provider you did not choose.
+I also remember the last 20 owner and assistant messages across restarts and version changes.
 As a stating point only OpenAI and Anthropic providers are supported.
 
 What should I become?"""
@@ -119,6 +122,14 @@ def self_test() -> int:
         no_implicit_default = load_selected_provider(selection_file) is None
         save_selected_provider(selection_file, "anthropic")
         selection_round_trip = load_selected_provider(selection_file) == "anthropic"
+        conversation_file = Path(tmp) / "recent.json"
+        test_memory = RecentConversation(conversation_file)
+        for number in range(DEFAULT_MESSAGE_LIMIT + 1):
+            test_memory.append("user", str(number), COMMIT_ID)
+        memory_round_trip = (
+            len(RecentConversation(conversation_file).messages)
+            == DEFAULT_MESSAGE_LIMIT
+        )
 
     provider_checks = [
         parse_provider_choice("openai") == "openai",
@@ -127,6 +138,7 @@ def self_test() -> int:
         parse_provider_choice("") is None,
         no_implicit_default,
         selection_round_trip,
+        memory_round_trip,
     ]
 
     if not all(provider_checks):
@@ -356,9 +368,15 @@ def main() -> int:
             "remembered across restarts and can be switched at any time."
         )
 
+    # Conversation state lives outside agent/ so successor commits and
+    # process restarts see the same bounded transcript.
+    conversation = RecentConversation(
+        CONVERSATION_FILE, limit=DEFAULT_MESSAGE_LIMIT
+    )
     previous_response_id = None
     pending = None
     offset = None
+    active_instructions = instructions
 
     def provider_status() -> str:
         available = [
@@ -381,8 +399,12 @@ def main() -> int:
         )
 
     def ask(chat_id: int, text: str, previous_id=None):
+        nonlocal active_instructions
+        if not previous_id:
+            active_instructions = conversation.add_to_instructions(instructions)
+
         kwargs = {
-            "instructions": instructions,
+            "instructions": active_instructions,
             "input": text,
             "tools": SHELL_TOOLS,
         }
@@ -390,6 +412,9 @@ def main() -> int:
         if previous_id:
             kwargs["previous_response_id"] = previous_id
 
+        # Persist an accepted owner message before the remote request so a
+        # crash or restart cannot make that message disappear.
+        conversation.append("user", text, COMMIT_ID)
         return model_response(chat_id, **kwargs)
 
     # --------------------------------------------------------
@@ -481,6 +506,7 @@ def main() -> int:
                     # The old provider's conversation state cannot resume
                     # on the new one.
                     previous_response_id = None
+                    active_instructions = instructions
 
                     notice = (
                         f"Model provider set to {choice} "
@@ -571,7 +597,7 @@ def main() -> int:
 
                     response = model_response(
                         chat_id,
-                        instructions=instructions,
+                        instructions=active_instructions,
                         previous_response_id=response.id,
                         input=outputs,
                         tools=SHELL_TOOLS,
@@ -632,11 +658,13 @@ def main() -> int:
                 else:
                     previous_response_id = response.id
 
-                    send(
-                        chat_id,
-                        response.output_text
-                        or "(no text response)",
+                    reply_text = (
+                        response.output_text or "(no text response)"
                     )
+                    conversation.append(
+                        "assistant", reply_text, COMMIT_ID
+                    )
+                    send(chat_id, reply_text)
 
         except KeyboardInterrupt:
             return 0
