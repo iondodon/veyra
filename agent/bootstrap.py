@@ -88,6 +88,7 @@ The selection is remembered across restarts, and nothing runs on a provider you 
 I also remember the last 20 owner and assistant messages across restarts and version changes.
 Send `/screenshot` whenever you want a current full-screen image.
 Send `/codex your prompt` to type it into the interactive Codex CLI already open in a terminal.
+Send `/claude your prompt` to type it into the interactive Claude CLI already open in a terminal.
 Use `/model MODEL_ID` to change the model at runtime without creating a new version.
 As a stating point only OpenAI and Anthropic providers are supported.
 
@@ -586,6 +587,137 @@ def send_prompt_to_open_codex(prompt: str, which=shutil.which,
     return window_id
 
 
+class ClaudeError(RuntimeError):
+    """A prompt could not be delivered to the open Claude terminal."""
+
+
+def _is_interactive_claude(argv: list[str], has_tty: bool) -> bool:
+    """Recognize native and npm-installed interactive Claude Code CLIs."""
+    if not has_tty or not argv:
+        return False
+    if Path(argv[0]).name in {"claude", "claude-code"}:
+        return True
+    # Older npm installs run `node .../@anthropic-ai/claude-code/cli.js`.
+    return (
+        Path(argv[0]).name in {"node", "nodejs"}
+        and len(argv) > 1
+        and "claude-code" in argv[1].lower()
+    )
+
+
+def find_open_claude_window(windows: list[dict],
+                            proc_root: Path = Path("/proc")) -> int:
+    """Find the compositor window containing interactive Claude Code."""
+    window_pids = {
+        int(window["pid"]): window for window in windows
+        if isinstance(window, dict) and window.get("pid") is not None
+    }
+    process_table = {}
+    try:
+        process_paths = list(proc_root.iterdir())
+    except OSError as exc:
+        raise ClaudeError(f"Could not inspect running applications: {exc}") from exc
+
+    claude_pids = []
+    for path in process_paths:
+        if not path.name.isdigit():
+            continue
+        info = _process_info(path)
+        if info is None:
+            continue
+        pid = int(path.name)
+        process_table[pid] = info
+        if _is_interactive_claude(info[2], info[1]):
+            claude_pids.append(pid)
+
+    matches = {}
+    for pid in claude_pids:
+        visited = set()
+        while pid and pid not in visited:
+            visited.add(pid)
+            if pid in window_pids:
+                matches[pid] = window_pids[pid]
+                break
+            info = process_table.get(pid)
+            if info is None:
+                info = _process_info(proc_root / str(pid))
+                if info is None:
+                    break
+                process_table[pid] = info
+            pid = info[0]
+
+    if not matches:
+        raise ClaudeError(
+            "No open interactive Claude terminal was found. Open Claude in a "
+            "terminal first, then try again."
+        )
+    if len(matches) == 1:
+        return int(next(iter(matches.values()))["id"])
+    focused = [window for window in matches.values() if window.get("is_focused")]
+    if len(focused) == 1:
+        return int(focused[0]["id"])
+    raise ClaudeError(
+        "More than one Claude terminal is open. Focus the intended one and try again."
+    )
+
+
+def send_prompt_to_open_claude(prompt: str, which=shutil.which,
+                               runner=subprocess.run,
+                               proc_root: Path = Path("/proc")) -> int:
+    """Focus the existing Claude terminal, type *prompt*, and press Enter."""
+    prompt = prompt.strip()
+    if not prompt:
+        raise ClaudeError("A prompt is required. Use /claude followed by your prompt.")
+
+    niri = which("niri")
+    wtype = which("wtype")
+    if not niri or not wtype:
+        raise ClaudeError(
+            "Desktop input support is unavailable (both niri and wtype are required)."
+        )
+    try:
+        listed = runner(
+            [niri, "msg", "--json", "windows"], capture_output=True,
+            text=True, encoding="utf-8", errors="replace", timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ClaudeError(f"Could not inspect open windows: {exc}") from exc
+    if listed.returncode != 0:
+        detail = (listed.stderr or listed.stdout or "").strip()
+        raise ClaudeError("Could not inspect open windows" +
+                          (f": {detail}" if detail else "."))
+    try:
+        windows = json.loads(listed.stdout)
+        if not isinstance(windows, list):
+            raise ValueError("window list is not an array")
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ClaudeError("The desktop returned an invalid window list.") from exc
+
+    window_id = find_open_claude_window(windows, proc_root)
+    try:
+        focused = runner(
+            [niri, "msg", "action", "focus-window", "--id", str(window_id)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=10,
+        )
+        if focused.returncode != 0:
+            raise ClaudeError("Could not focus the open Claude terminal.")
+        typed = runner(
+            [wtype, "-s", "150", "-", "-s", "75", "-k", "Return"],
+            input=prompt, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=30,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ClaudeError("Desktop input timed out while sending the prompt.") from exc
+    except OSError as exc:
+        raise ClaudeError(f"Could not send desktop input: {exc}") from exc
+    if typed.returncode != 0:
+        detail = (typed.stderr or typed.stdout or "").strip()
+        raise ClaudeError("Could not type into Claude" +
+                          (f": {detail}" if detail else "."))
+    return window_id
+
+
 def run_local(command: str, timeout: int = 120):
     p = subprocess.run(
         command,
@@ -803,6 +935,29 @@ def main() -> int:
                         send(chat_id, f"Could not send prompt to Codex: {exc}")
                     else:
                         send(chat_id, "Prompt sent to the open Codex session.")
+                    continue
+
+                # ------------------------------------------------
+                # Direct local Claude prompt
+                # ------------------------------------------------
+
+                if text == "/claude":
+                    send(
+                        chat_id,
+                        "Use /claude followed by a prompt. I will type it into "
+                        "the interactive Claude CLI already open in a terminal.",
+                    )
+                    continue
+
+                if text.startswith("/claude "):
+                    prompt = text.split(maxsplit=1)[1]
+                    send(chat_id, "Sending prompt to the open Claude session…")
+                    try:
+                        send_prompt_to_open_claude(prompt)
+                    except Exception as exc:
+                        send(chat_id, f"Could not send prompt to Claude: {exc}")
+                    else:
+                        send(chat_id, "Prompt sent to the open Claude session.")
                     continue
 
                 # ------------------------------------------------
