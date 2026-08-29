@@ -74,7 +74,48 @@ def save_selected_provider(path, name: str) -> None:
     path.write_text(json.dumps({"provider": choice}), encoding="utf-8")
 
 
-def create_provider(name: str, env=os.environ):
+def normalize_model_name(name) -> str | None:
+    """Return a usable model identifier, or None for invalid input."""
+    if not isinstance(name, str):
+        return None
+    model = name.strip()
+    if not model or len(model) > 200 or any(ch.isspace() for ch in model):
+        return None
+    return model
+
+
+def load_selected_model(path, provider: str) -> str | None:
+    """Read the persisted model for *provider*, if one was selected."""
+    try:
+        document = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(document, dict):
+        return None
+    return normalize_model_name(document.get(provider))
+
+
+def save_selected_model(path, provider: str, model: str) -> None:
+    """Persist a model per provider without exposing API credentials."""
+    choice = parse_provider_choice(provider)
+    model = normalize_model_name(model)
+    if choice is None:
+        raise ValueError(f"Unknown provider: {provider!r}")
+    if model is None:
+        raise ValueError("Model name must be non-empty and contain no spaces")
+    path = Path(path)
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        document = {}
+    if not isinstance(document, dict):
+        document = {}
+    document[choice] = model
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(document, sort_keys=True), encoding="utf-8")
+
+
+def create_provider(name: str, env=os.environ, model=None):
     """Build the explicitly named provider; there is no implicit default."""
     choice = parse_provider_choice(name)
     if choice is None:
@@ -84,15 +125,18 @@ def create_provider(name: str, env=os.environ):
     api_key = env.get(api_key_env_var(choice), "")
     if not api_key:
         raise ProviderConfigError(f"{api_key_env_var(choice)} is not set")
-    if choice == PROVIDER_OPENAI:
-        return OpenAIProvider(
-            api_key=api_key,
-            model=env.get("OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
+    if model is None:
+        model = env.get(
+            "OPENAI_MODEL" if choice == PROVIDER_OPENAI else "ANTHROPIC_MODEL",
+            DEFAULT_OPENAI_MODEL if choice == PROVIDER_OPENAI
+            else DEFAULT_ANTHROPIC_MODEL,
         )
-    return AnthropicProvider(
-        api_key=api_key,
-        model=env.get("ANTHROPIC_MODEL", DEFAULT_ANTHROPIC_MODEL),
-    )
+    model = normalize_model_name(model)
+    if model is None:
+        raise ProviderConfigError("Model name must be non-empty and contain no spaces")
+    if choice == PROVIDER_OPENAI:
+        return OpenAIProvider(api_key=api_key, model=model)
+    return AnthropicProvider(api_key=api_key, model=model)
 
 
 class OpenAIProvider:

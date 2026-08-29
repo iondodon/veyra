@@ -125,3 +125,18 @@ There is no distinction between a human branch and an agent-generated branch;
 there are only Git branches containing version commits. The owner must always
 retain the ability to stop the supervisor and recover by checking out a
 known-good commit.
+
+
+### Runtime model selection
+
+The owner can change the active model without changing Veyra code or creating a
+Git version:
+
+```text
+/model MODEL_ID
+/model
+```
+
+The selected model is persisted separately for each provider in
+`state/memory/models.json`. Provider selection remains controlled by
+`/provider openai` or `/provider anthropic`.

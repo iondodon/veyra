@@ -35,6 +35,31 @@ class ProviderSelectionTests(unittest.TestCase):
             providers.save_selected_provider(path, "openai")
             self.assertEqual(providers.load_selected_provider(path), "openai")
 
+    def test_model_selection_survives_a_save_and_load_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "models.json"
+            self.assertIsNone(providers.load_selected_model(path, "openai"))
+            providers.save_selected_model(path, "openai", "gpt-custom")
+            providers.save_selected_model(path, "anthropic", "claude-custom")
+            self.assertEqual(
+                providers.load_selected_model(path, "openai"), "gpt-custom"
+            )
+            self.assertEqual(
+                providers.load_selected_model(path, "anthropic"), "claude-custom"
+            )
+
+    def test_model_names_are_trimmed_and_reject_empty_or_spaces(self):
+        self.assertEqual(providers.normalize_model_name("  model-x  "), "model-x")
+        for invalid in ("", "   ", "model with spaces", None, 7):
+            self.assertIsNone(providers.normalize_model_name(invalid))
+
+    def test_explicit_model_overrides_environment_model(self):
+        provider = providers.create_provider(
+            "openai", {"OPENAI_API_KEY": "k", "OPENAI_MODEL": "env-model"},
+            model="runtime-model",
+        )
+        self.assertEqual(provider.model, "runtime-model")
+
     def test_corrupted_selection_state_means_no_provider(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "provider.json"
@@ -86,11 +111,19 @@ class ProviderWiringTests(unittest.TestCase):
     def test_intro_explains_explicit_provider_selection(self):
         self.assertIn("/provider openai", bootstrap.INTRO)
         self.assertIn("/provider anthropic", bootstrap.INTRO)
+        self.assertIn("/model MODEL_ID", bootstrap.INTRO)
+        self.assertEqual(bootstrap.MODEL_FILE, bootstrap.STATE / "memory" / "models.json")
 
     def test_provider_command_persists_the_choice(self):
         source = Path(bootstrap.__file__).read_text(encoding="utf-8")
         self.assertIn('text.startswith("/provider ")', source)
         self.assertIn("save_selected_provider(PROVIDER_FILE, choice)", source)
+
+    def test_model_command_is_runtime_only_and_persistent(self):
+        source = Path(bootstrap.__file__).read_text(encoding="utf-8")
+        self.assertIn('text.startswith("/model ")', source)
+        self.assertIn("save_selected_model(MODEL_FILE, provider.name, model_name)", source)
+        self.assertIn("does not create a Veyra version", source)
 
 
 class AnthropicAdapterTests(unittest.TestCase):

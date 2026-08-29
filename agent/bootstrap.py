@@ -18,7 +18,8 @@ import requests
 from memory import DEFAULT_MESSAGE_LIMIT, RecentConversation
 from providers import (
     PROVIDER_NAMES, ProviderConfigError, api_key_env_var, create_provider,
-    image_input, load_selected_provider, parse_provider_choice,
+    image_input, load_selected_model, load_selected_provider,
+    normalize_model_name, parse_provider_choice, save_selected_model,
     save_selected_provider,
 )
 
@@ -29,6 +30,7 @@ WORKSPACE = ROOT / "workspace"
 AGENT_DIR = Path(__file__).resolve().parent
 PROMPT = AGENT_DIR / "initial_prompt.md"
 PROVIDER_FILE = STATE / "memory" / "provider.json"
+MODEL_FILE = STATE / "memory" / "models.json"
 CONVERSATION_FILE = STATE / "memory" / "recent_messages.json"
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -86,6 +88,7 @@ The selection is remembered across restarts, and nothing runs on a provider you 
 I also remember the last 20 owner and assistant messages across restarts and version changes.
 Send `/screenshot` whenever you want a current full-screen image.
 Send `/codex your prompt` to type it into the interactive Codex CLI already open in a terminal.
+Use `/model MODEL_ID` to change the model at runtime without creating a new version.
 As a stating point only OpenAI and Anthropic providers are supported.
 
 What should I become?"""
@@ -637,7 +640,9 @@ def main() -> int:
 
     if remembered:
         try:
-            provider = create_provider(remembered)
+            provider = create_provider(
+                remembered, model=load_selected_model(MODEL_FILE, remembered)
+            )
         except ProviderConfigError as exc:
             provider_notice = (
                 f"The remembered model provider '{remembered}' cannot "
@@ -672,7 +677,8 @@ def main() -> int:
             else f"Model provider: {provider.name} (model {provider.model}).",
             "API keys available for: " + (", ".join(available) or "none") + ".",
             "Use `/provider openai` or `/provider anthropic` to select or "
-            "switch. The choice is remembered across restarts.",
+            "switch. Use `/model MODEL_ID` to change the model without "
+            "creating a new Veyra version. Choices are remembered across restarts.",
         ])
 
     def model_response(chat_id: int, **kwargs):
@@ -820,7 +826,9 @@ def main() -> int:
                         continue
 
                     try:
-                        provider = create_provider(choice)
+                        provider = create_provider(
+                            choice, model=load_selected_model(MODEL_FILE, choice)
+                        )
                     except ProviderConfigError as exc:
                         send(chat_id, str(exc))
                         continue
@@ -843,6 +851,38 @@ def main() -> int:
                         notice += " The pending shell request was cancelled."
 
                     send(chat_id, notice)
+                    continue
+
+                # ------------------------------------------------
+                # Runtime model selection (no Veyra version change)
+                # ------------------------------------------------
+
+                if text == "/model":
+                    send(
+                        chat_id,
+                        "No model provider is selected." if provider is None
+                        else f"Current model: {provider.model} ({provider.name}).\n"
+                             "Use /model MODEL_ID to change it.",
+                    )
+                    continue
+
+                if text.startswith("/model "):
+                    if provider is None:
+                        send(chat_id, "Select a provider first with /provider openai or /provider anthropic.")
+                        continue
+                    model_name = normalize_model_name(text.split(maxsplit=1)[1])
+                    if model_name is None:
+                        send(chat_id, "Use /model MODEL_ID (the model ID must be non-empty and contain no spaces).")
+                        continue
+                    try:
+                        provider = create_provider(provider.name, model=model_name)
+                    except ProviderConfigError as exc:
+                        send(chat_id, str(exc))
+                        continue
+                    save_selected_model(MODEL_FILE, provider.name, model_name)
+                    previous_response_id = None
+                    active_instructions = instructions
+                    send(chat_id, f"Model set to {model_name} ({provider.name}). This does not create a Veyra version and is remembered across restarts.")
                     continue
 
                 # ------------------------------------------------
