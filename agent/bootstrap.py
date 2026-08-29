@@ -200,14 +200,49 @@ def send_uploading_photo(chat_id: int):
     )
 
 
-def send_typing(chat_id: int):
-    """Show Telegram's transient typing indicator for this chat."""
-    return tg(
-        "sendChatAction",
+def send_thinking(chat_id: int):
+    """Post an honest, silent status while the model is processing.
+
+    Telegram controls the labels for its fixed chat actions, so a bot cannot
+    rename the native ``typing`` action to ``thinking``. Use a temporary
+    message instead and return its ID so it can be removed afterward.
+    """
+    message = tg(
+        "sendMessage",
         request_timeout=10,
         chat_id=chat_id,
-        action="typing",
+        text="💭 Thinking…",
+        disable_notification="true",
     )
+    return message["message_id"]
+
+
+def delete_message(chat_id: int, message_id: int):
+    """Remove a temporary Telegram status message."""
+    return tg(
+        "deleteMessage",
+        request_timeout=10,
+        chat_id=chat_id,
+        message_id=message_id,
+    )
+
+
+def run_with_thinking(operation, chat_id: int, notify):
+    """Run model work while displaying a disposable Thinking status."""
+    message_id = None
+    try:
+        try:
+            message_id = send_thinking(chat_id)
+        except Exception as exc:
+            # Status feedback is cosmetic and must never block model work.
+            print(f"Could not send thinking status: {exc}", file=sys.stderr)
+        return run_with_progress(operation, notify)
+    finally:
+        if message_id is not None:
+            try:
+                delete_message(chat_id, message_id)
+            except Exception as exc:
+                print(f"Could not remove thinking status: {exc}", file=sys.stderr)
 
 
 def run_with_progress(operation, notify, initial_delay=PROGRESS_INITIAL_DELAY,
@@ -215,9 +250,10 @@ def run_with_progress(operation, notify, initial_delay=PROGRESS_INITIAL_DELAY,
                       activity_interval=TELEGRAM_ACTIVITY_INTERVAL):
     """Run work with sparse messages and an optional transient heartbeat.
 
-    Telegram chat actions expire after a few seconds, so model calls provide an
-    activity callback that is refreshed while work remains unfinished. Callback
-    failures are merely cosmetic and never replace the operation's result.
+    Some operations provide a transient Telegram activity callback. Telegram
+    chat actions expire after a few seconds, so that callback is refreshed while
+    work remains unfinished. Callback failures are merely cosmetic and never
+    replace the operation's result.
     """
     completed = queue.Queue(maxsize=1)
 
@@ -496,10 +532,10 @@ def main() -> int:
         ])
 
     def model_response(chat_id: int, **kwargs):
-        return run_with_progress(
+        return run_with_thinking(
             lambda: provider.create_response(**kwargs),
+            chat_id,
             lambda elapsed: send(chat_id, progress_text(elapsed)),
-            activity=lambda: send_typing(chat_id),
         )
 
     def ask(chat_id: int, text: str, previous_id=None):

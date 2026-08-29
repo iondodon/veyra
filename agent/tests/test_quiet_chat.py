@@ -63,23 +63,73 @@ class QuietChatTests(unittest.TestCase):
         self.assertEqual(result, "answer")
         self.assertGreaterEqual(len(activities), 2)
 
-    def test_send_typing_uses_telegram_chat_action(self):
+    def test_thinking_status_is_a_silent_message(self):
         calls = []
 
         def fake_tg(method, **payload):
             calls.append((method, payload))
-            return True
+            return {"message_id": 456}
 
         original = bootstrap.tg
         bootstrap.tg = fake_tg
         try:
-            self.assertTrue(bootstrap.send_typing(123))
+            self.assertEqual(bootstrap.send_thinking(123), 456)
         finally:
             bootstrap.tg = original
 
-        self.assertEqual(calls[0][0], "sendChatAction")
+        self.assertEqual(calls[0][0], "sendMessage")
         self.assertEqual(calls[0][1]["chat_id"], 123)
-        self.assertEqual(calls[0][1]["action"], "typing")
+        self.assertEqual(calls[0][1]["text"], "💭 Thinking…")
+        self.assertEqual(calls[0][1]["disable_notification"], "true")
+
+    def test_thinking_status_is_removed_after_model_work(self):
+        events = []
+        original_send = bootstrap.send_thinking
+        original_delete = bootstrap.delete_message
+        bootstrap.send_thinking = lambda chat_id: events.append(
+            ("send", chat_id)
+        ) or 456
+        bootstrap.delete_message = lambda chat_id, message_id: events.append(
+            ("delete", chat_id, message_id)
+        )
+        try:
+            result = bootstrap.run_with_thinking(
+                lambda: events.append(("work",)) or "answer",
+                123,
+                lambda elapsed: None,
+            )
+        finally:
+            bootstrap.send_thinking = original_send
+            bootstrap.delete_message = original_delete
+
+        self.assertEqual(result, "answer")
+        self.assertEqual(
+            events,
+            [("send", 123), ("work",), ("delete", 123, 456)],
+        )
+
+    def test_thinking_status_is_removed_when_model_work_fails(self):
+        deleted = []
+        original_send = bootstrap.send_thinking
+        original_delete = bootstrap.delete_message
+        bootstrap.send_thinking = lambda chat_id: 456
+        bootstrap.delete_message = lambda chat_id, message_id: deleted.append(
+            (chat_id, message_id)
+        )
+
+        def fail():
+            raise RuntimeError("provider failed")
+
+        try:
+            with self.assertRaisesRegex(RuntimeError, "provider failed"):
+                bootstrap.run_with_thinking(
+                    fail, 123, lambda elapsed: None
+                )
+        finally:
+            bootstrap.send_thinking = original_send
+            bootstrap.delete_message = original_delete
+
+        self.assertEqual(deleted, [(123, 456)])
 
     def test_activity_failure_does_not_discard_result(self):
         def fail_activity():
