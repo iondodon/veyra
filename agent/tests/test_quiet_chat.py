@@ -40,6 +40,57 @@ class QuietChatTests(unittest.TestCase):
         self.assertGreaterEqual(len(notices), 1)
         self.assertTrue(all(isinstance(elapsed, int) for elapsed in notices))
 
+    def test_activity_is_immediate_and_refreshed_while_work_continues(self):
+        release = threading.Event()
+        activities = []
+
+        def operation():
+            release.wait(timeout=1)
+            return "answer"
+
+        timer = threading.Timer(0.07, release.set)
+        timer.start()
+        try:
+            result = bootstrap.run_with_progress(
+                operation, lambda elapsed: None,
+                initial_delay=1,
+                activity=lambda: activities.append(time.monotonic()),
+                activity_interval=0.02,
+            )
+        finally:
+            timer.cancel()
+
+        self.assertEqual(result, "answer")
+        self.assertGreaterEqual(len(activities), 2)
+
+    def test_send_typing_uses_telegram_chat_action(self):
+        calls = []
+
+        def fake_tg(method, **payload):
+            calls.append((method, payload))
+            return True
+
+        original = bootstrap.tg
+        bootstrap.tg = fake_tg
+        try:
+            self.assertTrue(bootstrap.send_typing(123))
+        finally:
+            bootstrap.tg = original
+
+        self.assertEqual(calls[0][0], "sendChatAction")
+        self.assertEqual(calls[0][1]["chat_id"], 123)
+        self.assertEqual(calls[0][1]["action"], "typing")
+
+    def test_activity_failure_does_not_discard_result(self):
+        def fail_activity():
+            raise RuntimeError("telegram unavailable")
+
+        result = bootstrap.run_with_progress(
+            lambda: "answer", lambda elapsed: None,
+            initial_delay=1, activity=fail_activity,
+        )
+        self.assertEqual(result, "answer")
+
     def test_operation_errors_are_propagated(self):
         def fail():
             raise RuntimeError("provider failed")

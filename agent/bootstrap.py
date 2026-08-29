@@ -37,6 +37,7 @@ TELEGRAM_OWNER_ID = os.environ.get("TELEGRAM_OWNER_ID", "")
 # reassure the owner occasionally without exposing chain-of-thought or logs.
 PROGRESS_INITIAL_DELAY = 30
 PROGRESS_INTERVAL = 60
+TELEGRAM_ACTIVITY_INTERVAL = 4
 
 SHELL_TOOLS = [
     {
@@ -156,7 +157,7 @@ def self_test() -> int:
     return 0
 
 
-def tg(method: str, **payload):
+def tg(method: str, request_timeout=70, **payload):
     url = (
         f"https://api.telegram.org/"
         f"bot{TELEGRAM_BOT_TOKEN}/{method}"
@@ -165,7 +166,7 @@ def tg(method: str, **payload):
     r = requests.post(
         url,
         data=payload,
-        timeout=70,
+        timeout=request_timeout,
     )
 
     r.raise_for_status()
@@ -187,9 +188,25 @@ def send(chat_id: int, text: str):
         )
 
 
+def send_typing(chat_id: int):
+    """Show Telegram's transient typing indicator for this chat."""
+    return tg(
+        "sendChatAction",
+        request_timeout=10,
+        chat_id=chat_id,
+        action="typing",
+    )
+
+
 def run_with_progress(operation, notify, initial_delay=PROGRESS_INITIAL_DELAY,
-                      interval=PROGRESS_INTERVAL):
-    """Run blocking work, emitting only sparse, content-free progress updates."""
+                      interval=PROGRESS_INTERVAL, activity=None,
+                      activity_interval=TELEGRAM_ACTIVITY_INTERVAL):
+    """Run work with sparse messages and an optional transient heartbeat.
+
+    Telegram chat actions expire after a few seconds, so model calls provide an
+    activity callback that is refreshed while work remains unfinished. Callback
+    failures are merely cosmetic and never replace the operation's result.
+    """
     completed = queue.Queue(maxsize=1)
 
     def worker():
@@ -200,22 +217,38 @@ def run_with_progress(operation, notify, initial_delay=PROGRESS_INITIAL_DELAY,
 
     threading.Thread(target=worker, daemon=True).start()
     started = time.monotonic()
-    wait = initial_delay
+    next_progress = started + initial_delay
+    next_activity = started if activity is not None else float("inf")
 
     while True:
-        try:
-            succeeded, value = completed.get(timeout=wait)
-            if succeeded:
-                return value
-            raise value
-        except queue.Empty:
-            elapsed = max(1, int(time.monotonic() - started))
+        now = time.monotonic()
+
+        if now >= next_activity:
+            try:
+                activity()
+            except Exception as exc:
+                print(f"Could not send activity update: {exc}", file=sys.stderr)
+            next_activity = time.monotonic() + activity_interval
+
+        now = time.monotonic()
+        if now >= next_progress:
+            elapsed = max(1, int(now - started))
             try:
                 notify(elapsed)
             except Exception as exc:
                 # A failed courtesy update must not discard the real result.
                 print(f"Could not send progress update: {exc}", file=sys.stderr)
-            wait = interval
+            next_progress = time.monotonic() + interval
+
+        timeout = max(0, min(next_progress, next_activity) - time.monotonic())
+        try:
+            succeeded, value = completed.get(timeout=timeout)
+        except queue.Empty:
+            continue
+
+        if succeeded:
+            return value
+        raise value
 
 
 def progress_text(elapsed_seconds: int) -> str:
@@ -396,6 +429,7 @@ def main() -> int:
         return run_with_progress(
             lambda: provider.create_response(**kwargs),
             lambda elapsed: send(chat_id, progress_text(elapsed)),
+            activity=lambda: send_typing(chat_id),
         )
 
     def ask(chat_id: int, text: str, previous_id=None):
