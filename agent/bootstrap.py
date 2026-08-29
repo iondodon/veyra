@@ -3,10 +3,13 @@
 import json
 import mimetypes
 import os
+import queue
+import shlex
 import subprocess
 import sys
 import tempfile
-import shlex
+import threading
+import time
 from pathlib import Path
 
 import requests
@@ -27,6 +30,11 @@ PROVIDER_FILE = STATE / "memory" / "provider.json"
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_OWNER_ID = os.environ.get("TELEGRAM_OWNER_ID", "")
+
+# Keep ordinary requests quiet. If a model or command takes unusually long,
+# reassure the owner occasionally without exposing chain-of-thought or logs.
+PROGRESS_INITIAL_DELAY = 30
+PROGRESS_INTERVAL = 60
 
 SHELL_TOOLS = [
     {
@@ -165,6 +173,45 @@ def send(chat_id: int, text: str):
             chat_id=chat_id,
             text=text[i:i + 3500] or " ",
         )
+
+
+def run_with_progress(operation, notify, initial_delay=PROGRESS_INITIAL_DELAY,
+                      interval=PROGRESS_INTERVAL):
+    """Run blocking work, emitting only sparse, content-free progress updates."""
+    completed = queue.Queue(maxsize=1)
+
+    def worker():
+        try:
+            completed.put((True, operation()))
+        except BaseException as exc:
+            completed.put((False, exc))
+
+    threading.Thread(target=worker, daemon=True).start()
+    started = time.monotonic()
+    wait = initial_delay
+
+    while True:
+        try:
+            succeeded, value = completed.get(timeout=wait)
+            if succeeded:
+                return value
+            raise value
+        except queue.Empty:
+            elapsed = max(1, int(time.monotonic() - started))
+            try:
+                notify(elapsed)
+            except Exception as exc:
+                # A failed courtesy update must not discard the real result.
+                print(f"Could not send progress update: {exc}", file=sys.stderr)
+            wait = interval
+
+
+def progress_text(elapsed_seconds: int) -> str:
+    if elapsed_seconds < 60:
+        return "Still working…"
+    minutes = max(1, elapsed_seconds // 60)
+    unit = "minute" if minutes == 1 else "minutes"
+    return f"Still working… ({minutes} {unit})"
 
 
 def send_intro(owner_id: int) -> bool:
@@ -327,7 +374,13 @@ def main() -> int:
             "switch. The choice is remembered across restarts.",
         ])
 
-    def ask(text: str, previous_id=None):
+    def model_response(chat_id: int, **kwargs):
+        return run_with_progress(
+            lambda: provider.create_response(**kwargs),
+            lambda elapsed: send(chat_id, progress_text(elapsed)),
+        )
+
+    def ask(chat_id: int, text: str, previous_id=None):
         kwargs = {
             "instructions": instructions,
             "input": text,
@@ -337,7 +390,7 @@ def main() -> int:
         if previous_id:
             kwargs["previous_response_id"] = previous_id
 
-        return provider.create_response(**kwargs)
+        return model_response(chat_id, **kwargs)
 
     # --------------------------------------------------------
     # Veyra initiates the conversation whenever Telegram
@@ -475,12 +528,12 @@ def main() -> int:
                         results = []
 
                         for command in call.action.commands:
-                            send(
-                                chat_id,
-                                f"$ {command}",
+                            result = run_with_progress(
+                                lambda command=command: run_local(command),
+                                lambda elapsed: send(
+                                    chat_id, progress_text(elapsed)
+                                ),
                             )
-
-                            result = run_local(command)
                             results.append(result)
 
                             # Make screenshots produced by an approved shell
@@ -508,18 +561,6 @@ def main() -> int:
                                 except OSError:
                                     pass
 
-                            preview = (
-                                result["stdout"]
-                                + "\n"
-                                + result["stderr"]
-                            ).strip()
-
-                            if preview:
-                                send(
-                                    chat_id,
-                                    preview[:3000],
-                                )
-
                         outputs.append({
                             "type": "shell_call_output",
                             "call_id": call.call_id,
@@ -528,7 +569,8 @@ def main() -> int:
 
                     pending = None
 
-                    response = provider.create_response(
+                    response = model_response(
+                        chat_id,
                         instructions=instructions,
                         previous_response_id=response.id,
                         input=outputs,
@@ -541,6 +583,7 @@ def main() -> int:
                         continue
 
                     response = ask(
+                        chat_id,
                         text,
                         previous_response_id,
                     )
@@ -562,8 +605,11 @@ def main() -> int:
                         calls,
                     )
 
+                    # Commands are the one implementation detail retained
+                    # in chat: owner approval must remain informed. Execution
+                    # logs and model internals stay hidden.
                     lines = [
-                        "Requested shell commands:",
+                        "Permission needed for local commands:",
                         "",
                     ]
 
