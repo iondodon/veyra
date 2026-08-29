@@ -4,6 +4,7 @@ import json
 import mimetypes
 import os
 import queue
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -87,8 +88,7 @@ The model provider is your explicit choice: select or switch it with `/provider 
 The selection is remembered across restarts, and nothing runs on a provider you did not choose.
 I also remember the last 20 owner and assistant messages across restarts and version changes.
 Send `/screenshot` whenever you want a current full-screen image.
-Send `/codex your prompt` to type it into the interactive Codex CLI already open in a terminal.
-Send `/claude your prompt` to type it into the interactive Claude CLI already open in a terminal.
+Send `/codex your prompt` or `/claude your prompt` to stage text in an open CLI. I will show a screenshot and wait for your approval before submitting it.
 Use `/model MODEL_ID` to change the model at runtime without creating a new version.
 As a stating point only OpenAI and Anthropic providers are supported.
 
@@ -186,12 +186,13 @@ def tg(method: str, request_timeout=70, **payload):
     return data["result"]
 
 
-def send(chat_id: int, text: str):
+def send(chat_id: int, text: str, **payload):
     for i in range(0, len(text) or 1, 3500):
         tg(
             "sendMessage",
             chat_id=chat_id,
             text=text[i:i + 3500] or " ",
+            **payload,
         )
 
 
@@ -527,10 +528,10 @@ def find_open_codex_window(windows: list[dict], proc_root: Path = Path("/proc"))
     )
 
 
-def send_prompt_to_open_codex(prompt: str, which=shutil.which,
+def stage_prompt_in_open_codex(prompt: str, which=shutil.which,
                               runner=subprocess.run,
                               proc_root: Path = Path("/proc")) -> int:
-    """Focus the existing Codex terminal, type *prompt*, and press Enter."""
+    """Focus the existing Codex terminal and type *prompt* without submitting."""
     prompt = prompt.strip()
     if not prompt:
         raise CodexError("A prompt is required. Use /codex followed by your prompt.")
@@ -572,14 +573,14 @@ def send_prompt_to_open_codex(prompt: str, which=shutil.which,
         # stdin keeps arbitrary prompt text out of shell parsing and safely
         # handles text beginning with '-'. A brief pause lets focus settle.
         typed = runner(
-            [wtype, "-s", "150", "-", "-s", "75", "-k", "Return"],
+            [wtype, "-s", "150", "-"],
             input=prompt, capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=30,
         )
     except subprocess.TimeoutExpired as exc:
-        raise CodexError("Desktop input timed out while sending the prompt.") from exc
+        raise CodexError("Desktop input timed out while staging the prompt.") from exc
     except OSError as exc:
-        raise CodexError(f"Could not send desktop input: {exc}") from exc
+        raise CodexError(f"Could not stage desktop input: {exc}") from exc
     if typed.returncode != 0:
         detail = (typed.stderr or typed.stdout or "").strip()
         raise CodexError("Could not type into Codex" +
@@ -661,10 +662,10 @@ def find_open_claude_window(windows: list[dict],
     )
 
 
-def send_prompt_to_open_claude(prompt: str, which=shutil.which,
+def stage_prompt_in_open_claude(prompt: str, which=shutil.which,
                                runner=subprocess.run,
                                proc_root: Path = Path("/proc")) -> int:
-    """Focus the existing Claude terminal, type *prompt*, and press Enter."""
+    """Focus the existing Claude terminal and type *prompt* without submitting."""
     prompt = prompt.strip()
     if not prompt:
         raise ClaudeError("A prompt is required. Use /claude followed by your prompt.")
@@ -703,20 +704,60 @@ def send_prompt_to_open_claude(prompt: str, which=shutil.which,
         if focused.returncode != 0:
             raise ClaudeError("Could not focus the open Claude terminal.")
         typed = runner(
-            [wtype, "-s", "150", "-", "-s", "75", "-k", "Return"],
+            [wtype, "-s", "150", "-"],
             input=prompt, capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=30,
         )
     except subprocess.TimeoutExpired as exc:
-        raise ClaudeError("Desktop input timed out while sending the prompt.") from exc
+        raise ClaudeError("Desktop input timed out while staging the prompt.") from exc
     except OSError as exc:
-        raise ClaudeError(f"Could not send desktop input: {exc}") from exc
+        raise ClaudeError(f"Could not stage desktop input: {exc}") from exc
     if typed.returncode != 0:
         detail = (typed.stderr or typed.stdout or "").strip()
         raise ClaudeError("Could not type into Claude" +
                           (f": {detail}" if detail else "."))
     return window_id
 
+
+def act_on_staged_prompt(window_id: int, submit: bool, which=shutil.which,
+                         runner=subprocess.run):
+    """Submit or erase text staged in a specific terminal window."""
+    niri = which("niri")
+    wtype = which("wtype")
+    if not niri or not wtype:
+        raise RuntimeError(
+            "Desktop input support is unavailable (both niri and wtype are required)."
+        )
+    try:
+        focused = runner(
+            [niri, "msg", "action", "focus-window", "--id", str(window_id)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=10,
+        )
+        if focused.returncode != 0:
+            raise RuntimeError("Could not focus the CLI terminal.")
+        action = ([wtype, "-k", "Return"] if submit else
+                  [wtype, "-M", "ctrl", "-k", "a", "-m", "ctrl",
+                   "-k", "BackSpace"])
+        result = runner(
+            action, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=10,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                "Could not submit the staged prompt." if submit
+                else "Could not clear the staged prompt."
+            )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"Could not control the CLI terminal: {exc}") from exc
+
+
+def approval_keyboard(token: str):
+    """Telegram inline buttons for the one currently staged CLI prompt."""
+    return json.dumps({"inline_keyboard": [[
+        {"text": "✅ Send prompt", "callback_data": f"cli:approve:{token}"},
+        {"text": "❌ Cancel", "callback_data": f"cli:cancel:{token}"},
+    ]]})
 
 def run_local(command: str, timeout: int = 120):
     p = subprocess.run(
@@ -795,6 +836,7 @@ def main() -> int:
     )
     previous_response_id = None
     pending = None
+    staged_cli = None
     offset = None
     active_instructions = instructions
 
@@ -861,7 +903,7 @@ def main() -> int:
         try:
             args = {
                 "timeout": 50,
-                "allowed_updates": '["message"]',
+                "allowed_updates": '["message","callback_query"]',
             }
 
             if offset is not None:
@@ -875,18 +917,57 @@ def main() -> int:
             for update in updates:
                 offset = update["update_id"] + 1
 
+                callback = update.get("callback_query") or {}
+                if callback:
+                    sender = callback.get("from") or {}
+                    message = callback.get("message") or {}
+                    chat = message.get("chat") or {}
+                    chat_id = chat.get("id")
+                    data = callback.get("data", "")
+                    try:
+                        tg("answerCallbackQuery", request_timeout=10,
+                           callback_query_id=callback.get("id"))
+                    except Exception as exc:
+                        print(f"Could not acknowledge approval button: {exc}",
+                              file=sys.stderr)
+                    if sender.get("id") != owner_id or chat_id is None:
+                        continue
+                    parts = data.split(":", 2)
+                    if len(parts) != 3 or parts[:2] not in (["cli", "approve"],
+                                                            ["cli", "cancel"]):
+                        continue
+                    if staged_cli is None or parts[2] != staged_cli["token"]:
+                        send(chat_id, "That CLI approval is no longer current.")
+                        continue
+                    submit = parts[1] == "approve"
+                    try:
+                        act_on_staged_prompt(staged_cli["window_id"], submit)
+                    except Exception as exc:
+                        action = "send" if submit else "cancel"
+                        send(chat_id, f"Could not {action} the staged prompt: {exc}")
+                    else:
+                        target = staged_cli["target"]
+                        staged_cli = None
+                        try:
+                            tg("editMessageReplyMarkup", request_timeout=10,
+                               chat_id=chat_id,
+                               message_id=message.get("message_id"),
+                               reply_markup=json.dumps({"inline_keyboard": []}))
+                        except Exception as exc:
+                            print(f"Could not remove approval buttons: {exc}",
+                                  file=sys.stderr)
+                        send(chat_id, (
+                            f"Prompt sent to {target}." if submit
+                            else f"Staged {target} prompt cancelled."
+                        ))
+                    continue
+
                 msg = update.get("message") or {}
                 sender = msg.get("from") or {}
                 chat = msg.get("chat") or {}
-
                 text = msg.get("text")
-
-                if not text:
+                if not text or sender.get("id") != owner_id:
                     continue
-
-                if sender.get("id") != owner_id:
-                    continue
-
                 chat_id = chat["id"]
 
                 # ------------------------------------------------
@@ -921,20 +1002,32 @@ def main() -> int:
                 if text == "/codex":
                     send(
                         chat_id,
-                        "Use /codex followed by a prompt. I will type it into "
-                        "the interactive Codex CLI already open in a terminal.",
+                        "Use /codex followed by a prompt. I will stage it in "
+                        "Codex, show you a screenshot, and wait for approval.",
                     )
                     continue
 
                 if text.startswith("/codex "):
+                    if staged_cli is not None:
+                        send(chat_id, "Approve or cancel the currently staged prompt first.")
+                        continue
                     prompt = text.split(maxsplit=1)[1]
-                    send(chat_id, "Sending prompt to the open Codex session…")
                     try:
-                        send_prompt_to_open_codex(prompt)
+                        window_id = stage_prompt_in_open_codex(prompt)
+                        staged_cli = {"target": "Codex", "window_id": window_id,
+                                      "token": secrets.token_hex(8)}
+                        capture_and_send_screenshot(chat_id)
                     except Exception as exc:
-                        send(chat_id, f"Could not send prompt to Codex: {exc}")
+                        if staged_cli is not None:
+                            try:
+                                act_on_staged_prompt(window_id, False)
+                                staged_cli = None
+                            except Exception as clear_exc:
+                                send(chat_id, f"Warning: could not clear staged text: {clear_exc}")
+                        send(chat_id, f"Could not stage Codex prompt for approval: {exc}")
                     else:
-                        send(chat_id, "Prompt sent to the open Codex session.")
+                        send(chat_id, "Review the staged Codex prompt above, then approve or cancel.",
+                             reply_markup=approval_keyboard(staged_cli["token"]))
                     continue
 
                 # ------------------------------------------------
@@ -944,20 +1037,32 @@ def main() -> int:
                 if text == "/claude":
                     send(
                         chat_id,
-                        "Use /claude followed by a prompt. I will type it into "
-                        "the interactive Claude CLI already open in a terminal.",
+                        "Use /claude followed by a prompt. I will stage it in "
+                        "Claude, show you a screenshot, and wait for approval.",
                     )
                     continue
 
                 if text.startswith("/claude "):
+                    if staged_cli is not None:
+                        send(chat_id, "Approve or cancel the currently staged prompt first.")
+                        continue
                     prompt = text.split(maxsplit=1)[1]
-                    send(chat_id, "Sending prompt to the open Claude session…")
                     try:
-                        send_prompt_to_open_claude(prompt)
+                        window_id = stage_prompt_in_open_claude(prompt)
+                        staged_cli = {"target": "Claude", "window_id": window_id,
+                                      "token": secrets.token_hex(8)}
+                        capture_and_send_screenshot(chat_id)
                     except Exception as exc:
-                        send(chat_id, f"Could not send prompt to Claude: {exc}")
+                        if staged_cli is not None:
+                            try:
+                                act_on_staged_prompt(window_id, False)
+                                staged_cli = None
+                            except Exception as clear_exc:
+                                send(chat_id, f"Warning: could not clear staged text: {clear_exc}")
+                        send(chat_id, f"Could not stage Claude prompt for approval: {exc}")
                     else:
-                        send(chat_id, "Prompt sent to the open Claude session.")
+                        send(chat_id, "Review the staged Claude prompt above, then approve or cancel.",
+                             reply_markup=approval_keyboard(staged_cli["token"]))
                     continue
 
                 # ------------------------------------------------

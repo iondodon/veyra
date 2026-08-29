@@ -151,8 +151,10 @@ terminal, the owner can send it a prompt from Telegram:
 /claude PROMPT
 ```
 
-Veyra finds the terminal containing that CLI, focuses it, types the prompt, and
-presses Enter. It does not start a new CLI process or retrieve the eventual CLI
-answer. This desktop bridge currently requires the Niri compositor and
-`wtype`. If several sessions of the requested CLI are open, focus the intended
-terminal before sending the command.
+Veyra finds the terminal containing that CLI, focuses it, and types the prompt
+without pressing Enter. It then sends a current desktop screenshot to Telegram
+with **Send prompt** and **Cancel** buttons. Only an approval for the current
+staged prompt presses Enter; cancellation erases the staged text. It does not
+start a new CLI process or retrieve the eventual CLI answer. This desktop bridge
+currently requires the Niri compositor and `wtype`. If several sessions of the
+requested CLI are open, focus the intended terminal before sending the command.

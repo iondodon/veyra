@@ -21,7 +21,7 @@ def add_process(proc, pid, ppid, argv, tty=34816):
 
 
 class CodexBridgeTests(unittest.TestCase):
-    def test_prompt_is_typed_into_existing_codex_terminal(self):
+    def test_prompt_is_staged_in_existing_codex_terminal(self):
         with tempfile.TemporaryDirectory() as tmp:
             proc = Path(tmp)
             add_process(proc, 100, 1, ["/usr/bin/ghostty"], tty=0)
@@ -38,7 +38,7 @@ class CodexBridgeTests(unittest.TestCase):
                     )
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-            window = bootstrap.send_prompt_to_open_codex(
+            window = bootstrap.stage_prompt_in_open_codex(
                 "fix the tests; echo $HOME",
                 which=lambda name: "/usr/bin/" + name,
                 runner=runner,
@@ -49,7 +49,7 @@ class CodexBridgeTests(unittest.TestCase):
         self.assertEqual(observed[1][0][-3:], ["focus-window", "--id", "7"])
         self.assertEqual(observed[2][0][0], "/usr/bin/wtype")
         self.assertEqual(observed[2][1]["input"], "fix the tests; echo $HOME")
-        self.assertEqual(observed[2][0][-2:], ["-k", "Return"])
+        self.assertNotIn("Return", observed[2][0])
         self.assertFalse(any("exec" in command for command, kwargs in observed))
 
     def test_focused_window_wins_when_multiple_codex_sessions_exist(self):
@@ -71,23 +71,60 @@ class CodexBridgeTests(unittest.TestCase):
 
     def test_empty_prompt_is_rejected_before_desktop_inspection(self):
         with self.assertRaisesRegex(bootstrap.CodexError, "prompt is required"):
-            bootstrap.send_prompt_to_open_codex("  ")
+            bootstrap.stage_prompt_in_open_codex("  ")
 
     def test_missing_desktop_tools_has_clear_error(self):
         with self.assertRaisesRegex(bootstrap.CodexError, "niri and wtype"):
-            bootstrap.send_prompt_to_open_codex("hello", which=lambda name: None)
+            bootstrap.stage_prompt_in_open_codex("hello", which=lambda name: None)
 
     def test_bad_window_listing_is_reported(self):
         result = SimpleNamespace(returncode=0, stdout="not json", stderr="")
         with self.assertRaisesRegex(bootstrap.CodexError, "invalid window list"):
-            bootstrap.send_prompt_to_open_codex(
+            bootstrap.stage_prompt_in_open_codex(
                 "hello", which=lambda name: "/bin/" + name,
                 runner=lambda *args, **kwargs: result,
             )
 
     def test_intro_describes_existing_interactive_session(self):
-        self.assertIn("already open", bootstrap.INTRO)
+        self.assertIn("open CLI", bootstrap.INTRO)
         self.assertNotIn("local Codex CLI in `workspace/`", bootstrap.INTRO)
+
+
+class StagedPromptApprovalTests(unittest.TestCase):
+    def test_approval_focuses_original_window_and_only_then_presses_return(self):
+        observed = []
+
+        def runner(command, **kwargs):
+            observed.append(command)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        bootstrap.act_on_staged_prompt(
+            17, True, which=lambda name: "/usr/bin/" + name, runner=runner
+        )
+        self.assertEqual(observed[0][-3:], ["focus-window", "--id", "17"])
+        self.assertEqual(observed[1], ["/usr/bin/wtype", "-k", "Return"])
+
+    def test_cancel_erases_staged_text_without_submitting(self):
+        observed = []
+
+        def runner(command, **kwargs):
+            observed.append(command)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        bootstrap.act_on_staged_prompt(
+            17, False, which=lambda name: "/usr/bin/" + name, runner=runner
+        )
+        self.assertIn("ctrl", observed[1])
+        self.assertEqual(observed[1][-2:], ["-k", "BackSpace"])
+        self.assertFalse(any("Return" in command for command in observed))
+
+    def test_telegram_workflow_has_screenshot_and_approval_buttons(self):
+        source = Path(bootstrap.__file__).read_text(encoding="utf-8")
+        self.assertIn("capture_and_send_screenshot(chat_id)", source)
+        keyboard = json.loads(bootstrap.approval_keyboard("abc123"))
+        callbacks = [button["callback_data"] for button in keyboard["inline_keyboard"][0]]
+        self.assertEqual(callbacks, ["cli:approve:abc123", "cli:cancel:abc123"])
+        self.assertIn("callback_query", source)
 
 
 if __name__ == "__main__":

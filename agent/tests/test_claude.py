@@ -20,7 +20,7 @@ def add_process(proc, pid, ppid, argv, tty=34816):
 
 
 class ClaudeBridgeTests(unittest.TestCase):
-    def test_prompt_is_typed_into_existing_claude_terminal(self):
+    def test_prompt_is_staged_in_existing_claude_terminal(self):
         with tempfile.TemporaryDirectory() as tmp:
             proc = Path(tmp)
             add_process(proc, 100, 1, ["/usr/bin/ghostty"], tty=0)
@@ -37,7 +37,7 @@ class ClaudeBridgeTests(unittest.TestCase):
                     )
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-            window = bootstrap.send_prompt_to_open_claude(
+            window = bootstrap.stage_prompt_in_open_claude(
                 "review this; echo $HOME",
                 which=lambda name: "/usr/bin/" + name,
                 runner=runner,
@@ -48,7 +48,7 @@ class ClaudeBridgeTests(unittest.TestCase):
         self.assertEqual(observed[1][0][-3:], ["focus-window", "--id", "9"])
         self.assertEqual(observed[2][0][0], "/usr/bin/wtype")
         self.assertEqual(observed[2][1]["input"], "review this; echo $HOME")
-        self.assertEqual(observed[2][0][-2:], ["-k", "Return"])
+        self.assertNotIn("Return", observed[2][0])
         self.assertFalse(any("exec" in command for command, kwargs in observed))
 
     def test_npm_claude_code_process_is_recognized(self):
@@ -85,17 +85,17 @@ class ClaudeBridgeTests(unittest.TestCase):
 
     def test_empty_prompt_is_rejected_before_desktop_inspection(self):
         with self.assertRaisesRegex(bootstrap.ClaudeError, "prompt is required"):
-            bootstrap.send_prompt_to_open_claude("  ")
+            bootstrap.stage_prompt_in_open_claude("  ")
 
     def test_missing_desktop_tools_has_clear_error(self):
         with self.assertRaisesRegex(bootstrap.ClaudeError, "niri and wtype"):
-            bootstrap.send_prompt_to_open_claude("hello", which=lambda name: None)
+            bootstrap.stage_prompt_in_open_claude("hello", which=lambda name: None)
 
     def test_intro_and_handler_expose_claude_command(self):
         self.assertIn("/claude your prompt", bootstrap.INTRO)
         source = Path(bootstrap.__file__).read_text(encoding="utf-8")
         self.assertIn('text.startswith("/claude ")', source)
-        self.assertIn("send_prompt_to_open_claude(prompt)", source)
+        self.assertIn("stage_prompt_in_open_claude(prompt)", source)
 
 
 if __name__ == "__main__":
