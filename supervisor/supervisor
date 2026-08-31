@@ -5,6 +5,7 @@
 import fcntl
 import os
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -15,6 +16,7 @@ POLL_INTERVAL_SECONDS = 0.25
 RESTART_DELAY_SECONDS = 1.0
 STOP_TIMEOUT_SECONDS = 5.0
 LOCK_FILE_NAME = "supervisor.lock"
+DASHBOARD_DIR_NAME = "web"
 
 
 class SupervisorError(RuntimeError):
@@ -176,6 +178,43 @@ def start_agent(agent: Path, revision: str) -> subprocess.Popen:
     )
 
 
+def start_dashboard(root: Path) -> subprocess.Popen | None:
+    """Start the instance-local dashboard when this Veyra has one.
+
+    The dashboard is deliberately optional: initial Veyra clones do not carry
+    it, while evolved local instances may keep one outside versioned source.
+    Its process is owned by the supervisor so it cannot outlive Veyra.
+    """
+    dashboard = root / DASHBOARD_DIR_NAME
+    package = dashboard / "package.json"
+
+    if not package.is_file():
+        return None
+
+    npm = shutil.which("npm")
+    if npm is None:
+        log("dashboard is available but npm is not installed; not starting it")
+        return None
+
+    log("starting private dashboard")
+    try:
+        return subprocess.Popen(
+            [npm, "run", "dev"],
+            cwd=dashboard,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        log(f"dashboard could not start: {exc}")
+        return None
+
+
+def stop_dashboard(process: subprocess.Popen | None) -> None:
+    if process is None:
+        return
+    log("stopping private dashboard")
+    stop_agent(process)
+
+
 def stop_agent(process: subprocess.Popen) -> None:
     if process.poll() is not None:
         return
@@ -227,6 +266,7 @@ def main() -> int:
         return 1
 
     process = start_agent(agent, active_revision)
+    dashboard = start_dashboard(root)
     shutting_down = False
     last_rejection: tuple[str, str] | None = None
 
@@ -290,8 +330,20 @@ def main() -> int:
                 process = start_agent(agent, active_revision)
                 continue
 
+            if dashboard is not None and dashboard.poll() is not None:
+                code = dashboard.returncode
+                log(
+                    f"private dashboard exited with code {code}; restarting in "
+                    f"{RESTART_DELAY_SECONDS:g}s"
+                )
+                time.sleep(RESTART_DELAY_SECONDS)
+                if shutting_down:
+                    break
+                dashboard = start_dashboard(root)
+
             time.sleep(POLL_INTERVAL_SECONDS)
     finally:
+        stop_dashboard(dashboard)
         stop_agent(process)
         os.close(lock)
 

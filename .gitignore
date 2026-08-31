@@ -9,6 +9,7 @@
 !/supervisor/
 !/state/
 !/workspace/
+!/web/
 
 # state/: track only the directory structure
 /state/*

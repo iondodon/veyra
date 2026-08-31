@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SUPERVISOR_PATH = Path(__file__).resolve().parents[1] / "supervisor"
@@ -177,6 +178,85 @@ class SingleInstanceLockTests(unittest.TestCase):
         self.addCleanup(os.close, first)
         second = supervisor.acquire_single_instance_lock(self.make_root())
         self.addCleanup(os.close, second)
+
+
+class DashboardLifecycleTests(unittest.TestCase):
+    def make_root(self, with_dashboard: bool = True) -> Path:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        if with_dashboard:
+            dashboard = root / supervisor.DASHBOARD_DIR_NAME
+            dashboard.mkdir()
+            (dashboard / "package.json").write_text("{}\n")
+        return root
+
+    def test_dashboard_is_optional_for_initial_versions(self):
+        root = self.make_root(with_dashboard=False)
+
+        with mock.patch.object(supervisor.subprocess, "Popen") as popen:
+            self.assertIsNone(supervisor.start_dashboard(root))
+
+        popen.assert_not_called()
+
+    def test_dashboard_is_started_in_its_own_process_group(self):
+        root = self.make_root()
+        expected_process = object()
+
+        with (
+            mock.patch.object(supervisor.shutil, "which", return_value="/usr/bin/npm"),
+            mock.patch.object(
+                supervisor.subprocess, "Popen", return_value=expected_process
+            ) as popen,
+        ):
+            process = supervisor.start_dashboard(root)
+
+        self.assertIs(process, expected_process)
+        popen.assert_called_once_with(
+            ["/usr/bin/npm", "run", "dev"],
+            cwd=root / supervisor.DASHBOARD_DIR_NAME,
+            start_new_session=True,
+        )
+
+    def test_missing_npm_leaves_dashboard_stopped(self):
+        root = self.make_root()
+
+        with (
+            mock.patch.object(supervisor.shutil, "which", return_value=None),
+            mock.patch.object(supervisor.subprocess, "Popen") as popen,
+        ):
+            self.assertIsNone(supervisor.start_dashboard(root))
+
+        popen.assert_not_called()
+
+    def test_supervisor_stops_dashboard_when_veyra_stops(self):
+        root = self.make_root()
+        agent = root / "agent"
+        agent_process = object()
+        dashboard_process = object()
+
+        with (
+            mock.patch.object(supervisor, "repository_root", return_value=root),
+            mock.patch.object(supervisor, "acquire_single_instance_lock", return_value=17),
+            mock.patch.object(
+                supervisor,
+                "current_revision",
+                side_effect=["a" * 40, supervisor.SupervisorError("stopped")],
+            ),
+            mock.patch.object(supervisor, "prepare_checked_out_agent", return_value=agent),
+            mock.patch.object(supervisor, "start_agent", return_value=agent_process),
+            mock.patch.object(
+                supervisor, "start_dashboard", return_value=dashboard_process
+            ),
+            mock.patch.object(supervisor, "stop_agent") as stop_agent,
+            mock.patch.object(supervisor, "stop_dashboard") as stop_dashboard,
+            mock.patch.object(supervisor.signal, "signal"),
+            mock.patch.object(supervisor.os, "close"),
+        ):
+            self.assertEqual(supervisor.main(), 1)
+
+        stop_dashboard.assert_called_once_with(dashboard_process)
+        stop_agent.assert_called_once_with(agent_process)
 
 
 if __name__ == "__main__":
