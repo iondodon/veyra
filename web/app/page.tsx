@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 
 type Section = 'Overview' | 'Conversations' | 'Evolution' | 'Memory' | 'System';
 
@@ -12,14 +12,42 @@ const navItems: { label: Section; number: string; symbol: string }[] = [
   { label: 'System', number: '05', symbol: '⌁' },
 ];
 
-const versions = [
-  ['de36fde', 'Notify when Codex or Claude finishes', '2 days ago'],
-  ['00e89c5', 'Remember how to select terminal tabs', '3 days ago'],
-  ['261a86e', 'Run only one Veyra per bot token', '3 days ago'],
-  ['0f12e82', 'Keep staged slash commands visible', '4 days ago'],
-  ['feecc5e', 'Clear staged CLI input on cancellation', '4 days ago'],
-  ['4af44be', 'Require approval before submitting CLI prompts', '5 days ago'],
-];
+type RuntimeStatus = {
+  schema_version: number;
+  updated_at: string;
+  agent: { state: 'running' | 'restarting' | 'stopped'; pid: number | null };
+  revision: {
+    commit: string;
+    short: string;
+    branch: string;
+    message: string;
+    committed_at: string | null;
+  };
+  runtime: {
+    provider: string | null;
+    model: string | null;
+    recent_message_count: number;
+  };
+  versions: { commit: string; message: string; committed_at: string }[];
+};
+
+function titleCase(value: string | null | undefined, fallback = 'Not selected') {
+  if (!value) return fallback;
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function relativeTime(value: string | null | undefined) {
+  if (!value) return 'Unknown time';
+  const elapsed = Date.now() - new Date(value).getTime();
+  if (!Number.isFinite(elapsed)) return 'Unknown time';
+  const minutes = Math.max(0, Math.floor(elapsed / 60_000));
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
 
 const sectionIntro: Record<Section, { eyebrow: string; title: string; copy: string }> = {
   Overview: {
@@ -75,7 +103,24 @@ export default function Home() {
   const [query, setQuery] = useState('');
   const [mobileOpen, setMobileOpen] = useState(false);
   const [toast, setToast] = useState('');
+  const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
+  const [statusError, setStatusError] = useState(false);
   const intro = sectionIntro[section];
+
+  const refreshStatus = useCallback(async () => {
+    try {
+      const response = await fetch(`/veyra-status.json?t=${Date.now()}`, {
+        cache: 'no-store',
+      });
+      if (!response.ok) throw new Error(`status ${response.status}`);
+      const value = (await response.json()) as RuntimeStatus;
+      if (value.schema_version !== 1) throw new Error('unsupported status');
+      setRuntime(value);
+      setStatusError(false);
+    } catch {
+      setStatusError(true);
+    }
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -91,6 +136,15 @@ export default function Home() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
+
+  useEffect(() => {
+    const initial = window.setTimeout(() => void refreshStatus(), 0);
+    const interval = window.setInterval(() => void refreshStatus(), 3000);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(interval);
+    };
+  }, [refreshStatus]);
 
   useEffect(() => {
     if (!toast) return;
@@ -111,6 +165,8 @@ export default function Home() {
   };
 
   const copy = (value: string, message: string) => copyText(value, () => setToast(message));
+  const agentRunning = runtime?.agent.state === 'running';
+  const agentState = runtime?.agent.state ?? 'stopped';
 
   return (
     <main className="app-shell">
@@ -138,8 +194,11 @@ export default function Home() {
         <div className="sidebar-meta">
           <p className="nav-label">Local instance</p>
           <button className="mini-row" onClick={() => navigate('System')}>
-            <span className="status-dot stopped" />
-            <span><b>Agent stopped</b><small>Start locally to come online</small></span>
+            <span className={`status-dot ${agentRunning ? '' : agentState}`} />
+            <span>
+              <b>{runtime ? `Agent ${agentState}` : 'Reading agent state'}</b>
+              <small>{agentRunning ? `PID ${runtime.agent.pid}` : statusError ? 'Live status unavailable' : 'Waiting for supervisor'}</small>
+            </span>
             <span>→</span>
           </button>
         </div>
@@ -164,7 +223,7 @@ export default function Home() {
             </button>
           </div>
           <div className="topbar-actions">
-            <button className="sync-button" onClick={() => window.location.reload()}><span>↻</span> Refresh snapshot</button>
+            <button className="sync-button" onClick={() => void refreshStatus()}><span>↻</span> Refresh live data</button>
             <button className="quiet-button" aria-label="About this dashboard" title="Local dashboard">i</button>
             <div className="owner-avatar" aria-label="Owner profile">ID</div>
           </div>
@@ -173,7 +232,9 @@ export default function Home() {
         <div className="content">
           <div className="eyebrow-row">
             <p className="eyebrow">{intro.eyebrow}</p>
-            <p className="snapshot-label"><span /> Local snapshot</p>
+            <p className={`snapshot-label ${statusError ? 'status-error' : ''}`}>
+              <span /> {statusError ? 'Live data unavailable' : runtime ? `Updated ${relativeTime(runtime.updated_at)}` : 'Connecting…'}
+            </p>
           </div>
 
           <section className="hero-row">
@@ -188,11 +249,11 @@ export default function Home() {
             )}
           </section>
 
-          {section === 'Overview' && <Overview onNavigate={navigate} onCopy={copy} />}
-          {section === 'Conversations' && <Conversations onCopy={copy} />}
-          {section === 'Evolution' && <Evolution />}
-          {section === 'Memory' && <Memory />}
-          {section === 'System' && <System onCopy={copy} />}
+          {section === 'Overview' && <Overview runtime={runtime} onNavigate={navigate} onCopy={copy} />}
+          {section === 'Conversations' && <Conversations runtime={runtime} onCopy={copy} />}
+          {section === 'Evolution' && <Evolution runtime={runtime} />}
+          {section === 'Memory' && <Memory runtime={runtime} />}
+          {section === 'System' && <System runtime={runtime} onCopy={copy} />}
         </div>
       </section>
 
@@ -221,29 +282,35 @@ export default function Home() {
   );
 }
 
-function Overview({ onNavigate, onCopy }: { onNavigate: (section: Section) => void; onCopy: (value: string, message: string) => void }) {
+function Overview({ runtime, onNavigate, onCopy }: { runtime: RuntimeStatus | null; onNavigate: (section: Section) => void; onCopy: (value: string, message: string) => void }) {
+  const running = runtime?.agent.state === 'running';
+  const state = runtime?.agent.state ?? 'loading';
+  const versions = runtime?.versions ?? [];
+  const provider = titleCase(runtime?.runtime.provider);
+  const model = runtime?.runtime.model ?? 'Not selected';
+
   return (
     <>
       <section className="metric-grid" aria-label="Agent metrics">
         <article className="metric-card dark-card">
           <div className="metric-head"><span>Agent state</span><span className="metric-icon">⌁</span></div>
-          <strong>Stopped</strong>
-          <p><span className="status-dot stopped" /> No running process detected</p>
+          <strong>{titleCase(state, 'Loading…')}</strong>
+          <p><span className={`status-dot ${running ? '' : state}`} /> {running ? `Supervisor process ${runtime.agent.pid}` : runtime ? 'Supervisor is restarting the agent' : 'Reading live supervisor state'}</p>
         </article>
         <article className="metric-card">
           <div className="metric-head"><span>Recent context</span><span className="metric-icon">◫</span></div>
-          <strong>20</strong>
+          <strong>{runtime?.runtime.recent_message_count ?? '—'}</strong>
           <p>messages retained locally</p>
         </article>
         <article className="metric-card">
           <div className="metric-head"><span>Current version</span><span className="metric-icon">↗</span></div>
-          <strong className="mono-value">de36fde</strong>
+          <strong className="mono-value">{runtime?.revision.short ?? '—'}</strong>
           <p>latest checked-out commit</p>
         </article>
         <article className="metric-card accent-card">
           <div className="metric-head"><span>Selected model</span><span className="metric-icon">✦</span></div>
-          <strong>GPT-5.6 Luna</strong>
-          <p>OpenAI · configured</p>
+          <strong>{model}</strong>
+          <p>{provider} · {runtime?.runtime.model ? 'configured' : 'not configured'}</p>
         </article>
       </section>
 
@@ -254,9 +321,9 @@ function Overview({ onNavigate, onCopy }: { onNavigate: (section: Section) => vo
             <button className="text-button" onClick={() => onNavigate('System')}>Full status <span>→</span></button>
           </div>
           <div className="readiness-list">
-            <StatusRow label="Provider selected" detail="OpenAI" state="ready" />
-            <StatusRow label="Model configured" detail="gpt-5.6-luna" state="ready" />
-            <StatusRow label="Supervisor process" detail="Not running" state="attention" />
+            <StatusRow label="Provider selected" detail={provider} state={runtime?.runtime.provider ? 'ready' : 'attention'} />
+            <StatusRow label="Model configured" detail={model} state={runtime?.runtime.model ? 'ready' : 'attention'} />
+            <StatusRow label="Agent process" detail={running ? `Running as PID ${runtime.agent.pid}` : titleCase(state)} state={running ? 'ready' : 'attention'} />
             <StatusRow label="Dashboard exposure" detail="Private LAN only" state="ready" />
           </div>
           <button className="command-strip" onClick={() => onCopy('./supervisor/supervisor', 'Startup command copied')}>
@@ -267,11 +334,11 @@ function Overview({ onNavigate, onCopy }: { onNavigate: (section: Section) => vo
         <article className="panel version-preview">
           <div className="panel-head">
             <div><p className="panel-kicker">Evolution</p><h2>Current version</h2></div>
-            <span className="safe-badge">Known state</span>
+            <span className="safe-badge">Live HEAD</span>
           </div>
-          <div className="version-number">de36fde</div>
-          <p className="commit-message">Notify when Codex or Claude finishes</p>
-          <div className="version-meta"><span>Committed 2 days ago</span><span>main</span></div>
+          <div className="version-number">{runtime?.revision.short ?? 'Loading…'}</div>
+          <p className="commit-message">{runtime?.revision.message || 'Reading the current commit message…'}</p>
+          <div className="version-meta"><span>{runtime ? `Committed ${relativeTime(runtime.revision.committed_at)}` : 'Loading time'}</span><span>{runtime?.revision.branch ?? '—'}</span></div>
           <button className="version-button" onClick={() => onNavigate('Evolution')}>View evolution history <span>→</span></button>
         </article>
       </section>
@@ -282,19 +349,22 @@ function Overview({ onNavigate, onCopy }: { onNavigate: (section: Section) => vo
           <button className="text-button" onClick={() => onNavigate('Evolution')}>See all versions <span>→</span></button>
         </div>
         <div className="recent-list">
-          {versions.slice(0, 3).map(([hash, message, time], index) => (
-            <div className="recent-row" key={hash}>
+          {versions.slice(0, 3).map((version, index) => (
+            <div className="recent-row" key={version.commit}>
               <span className={index === 0 ? 'timeline-dot newest' : 'timeline-dot'} />
-              <code>{hash}</code><p>{message}</p><time>{time}</time>
+              <code>{version.commit}</code><p>{version.message}</p><time>{relativeTime(version.committed_at)}</time>
             </div>
           ))}
+          {!versions.length && <p className="loading-copy">Reading version history…</p>}
         </div>
       </section>
     </>
   );
 }
 
-function Conversations({ onCopy }: { onCopy: (value: string, message: string) => void }) {
+function Conversations({ runtime, onCopy }: { runtime: RuntimeStatus | null; onCopy: (value: string, message: string) => void }) {
+  const messageCount = runtime?.runtime.recent_message_count;
+
   return (
     <section className="two-column-page">
       <article className="panel feature-panel conversation-feature">
@@ -302,13 +372,13 @@ function Conversations({ onCopy }: { onCopy: (value: string, message: string) =>
         <p className="panel-kicker">Primary interface</p>
         <h2>Telegram keeps Veyra within reach.</h2>
         <p className="feature-copy">The owner can talk to the agent, switch providers or models, and approve staged desktop actions without opening this dashboard.</p>
-        <div className="detail-pills"><span>Owner-only</span><span>Long polling</span><span>20-message context</span></div>
+        <div className="detail-pills"><span>Owner-only</span><span>Long polling</span><span>{messageCount ?? '—'} messages retained</span></div>
         <button className="primary-button compact" onClick={() => onCopy('/provider', 'Provider command copied')}><span>+</span> Copy provider command</button>
       </article>
       <div className="stacked-panels">
         <article className="panel compact-panel">
-          <div className="panel-head"><div><p className="panel-kicker">Context window</p><h2>Recent messages</h2></div><strong className="big-number">20</strong></div>
-          <div className="progress-track"><span style={{ width: '100%' }} /></div>
+          <div className="panel-head"><div><p className="panel-kicker">Local context</p><h2>Recent messages</h2></div><strong className="big-number">{messageCount ?? '—'}</strong></div>
+          <div className="progress-track"><span style={{ width: messageCount == null ? '0%' : `${Math.min(100, messageCount * 5)}%` }} /></div>
           <p className="support-copy">Veyra keeps a bounded recent history locally for conversational continuity.</p>
         </article>
         <article className="panel compact-panel">
@@ -324,18 +394,21 @@ function Conversations({ onCopy }: { onCopy: (value: string, message: string) =>
   );
 }
 
-function Evolution() {
+function Evolution({ runtime }: { runtime: RuntimeStatus | null }) {
+  const versions = runtime?.versions ?? [];
+
   return (
     <section className="evolution-layout">
       <article className="panel evolution-list-panel">
-        <div className="panel-head"><div><p className="panel-kicker">Version history</p><h2>Recent commits</h2></div><span className="branch-badge">main</span></div>
+        <div className="panel-head"><div><p className="panel-kicker">Version history</p><h2>Recent commits</h2></div><span className="branch-badge">{runtime?.revision.branch ?? '—'}</span></div>
         <div className="commit-timeline">
-          {versions.map(([hash, message, time], index) => (
-            <div className="commit-row" key={hash}>
-              <div className="commit-rail"><span className={index === 0 ? 'commit-dot current' : 'commit-dot'} /></div>
-              <div className="commit-body"><div><p>{message}</p>{index === 0 && <span>Current</span>}</div><code>{hash}</code><time>{time}</time></div>
+          {versions.map((version, index) => (
+            <div className="commit-row" key={version.commit}>
+              <div className="commit-rail"><span className={runtime?.revision.commit.startsWith(version.commit) ? 'commit-dot current' : 'commit-dot'} /></div>
+              <div className="commit-body"><div><p>{version.message}</p>{runtime?.revision.commit.startsWith(version.commit) && <span>Active</span>}{index === 0 && !runtime?.revision.commit.startsWith(version.commit) && <span>HEAD</span>}</div><code>{version.commit}</code><time>{relativeTime(version.committed_at)}</time></div>
             </div>
           ))}
+          {!versions.length && <p className="loading-copy">Reading Git history…</p>}
         </div>
       </article>
       <aside className="evolution-aside">
@@ -353,13 +426,13 @@ function Evolution() {
   );
 }
 
-function Memory() {
+function Memory({ runtime }: { runtime: RuntimeStatus | null }) {
   return (
     <>
       <section className="memory-grid">
-        <article className="panel memory-card"><span className="memory-icon">◎</span><p className="panel-kicker">Provider</p><h2>OpenAI</h2><p>Selected provider for the local instance.</p><code>provider.json</code></article>
-        <article className="panel memory-card accent-memory"><span className="memory-icon">✦</span><p className="panel-kicker">Model</p><h2>gpt-5.6-luna</h2><p>Remembered separately for each provider.</p><code>models.json</code></article>
-        <article className="panel memory-card"><span className="memory-icon">◫</span><p className="panel-kicker">Recent context</p><h2>20 messages</h2><p>Bounded conversation history stored locally.</p><code>recent_messages.json</code></article>
+        <article className="panel memory-card"><span className="memory-icon">◎</span><p className="panel-kicker">Provider</p><h2>{titleCase(runtime?.runtime.provider)}</h2><p>Selected provider for the local instance.</p><code>provider.json</code></article>
+        <article className="panel memory-card accent-memory"><span className="memory-icon">✦</span><p className="panel-kicker">Model</p><h2>{runtime?.runtime.model ?? 'Not selected'}</h2><p>Remembered separately for each provider.</p><code>models.json</code></article>
+        <article className="panel memory-card"><span className="memory-icon">◫</span><p className="panel-kicker">Recent context</p><h2>{runtime ? `${runtime.runtime.recent_message_count} messages` : 'Loading…'}</h2><p>Bounded conversation history stored locally.</p><code>recent_messages.json</code></article>
       </section>
       <section className="panel boundary-panel">
         <div><p className="panel-kicker">A useful boundary</p><h2>Memory is state, not source.</h2></div>
@@ -370,14 +443,16 @@ function Memory() {
   );
 }
 
-function System({ onCopy }: { onCopy: (value: string, message: string) => void }) {
+function System({ runtime, onCopy }: { runtime: RuntimeStatus | null; onCopy: (value: string, message: string) => void }) {
+  const running = runtime?.agent.state === 'running';
+
   return (
     <section className="system-grid">
       <article className="panel system-status-card dark-card">
         <div className="system-orbit"><span>v</span></div>
         <p className="panel-kicker">Supervisor</p>
-        <h2>Veyra is not running.</h2>
-        <p>No active supervisor or agent process was detected when this dashboard snapshot was created.</p>
+        <h2>{runtime ? `Veyra is ${runtime.agent.state}.` : 'Reading Veyra state…'}</h2>
+        <p>{running ? `The supervisor owns agent process ${runtime.agent.pid} and will restart it if needed.` : runtime ? 'The supervisor is transitioning the agent process.' : 'Waiting for the supervisor runtime snapshot.'}</p>
         <button className="light-button" onClick={() => onCopy('./supervisor/supervisor', 'Startup command copied')}>Copy startup command <span>→</span></button>
       </article>
       <div className="system-details">
@@ -391,7 +466,7 @@ function System({ onCopy }: { onCopy: (value: string, message: string) => void }
           <div className="readiness-list small">
             <StatusRow label="Single-instance lock" detail="Enforced" state="ready" />
             <StatusRow label="Agent self-test" detail="Required" state="ready" />
-            <StatusRow label="Git-tracked source" detail="Required" state="ready" />
+            <StatusRow label="Checked-out version" detail={runtime?.revision.short ?? 'Reading…'} state={runtime ? 'ready' : 'attention'} />
           </div>
         </article>
       </div>

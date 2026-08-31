@@ -1,13 +1,15 @@
 import { sites } from '@openai/sites-vite-plugin';
 import tailwindcss from '@tailwindcss/postcss';
+import { readFile } from 'node:fs/promises';
 import vinext from 'vinext';
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import hostingConfig from './.openai/hosting.json';
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   '00000000-0000-4000-8000-000000000000';
 
 const { d1, r2 } = hostingConfig;
+const VEYRA_STATUS_FILE = new URL('../state/dashboard.json', import.meta.url);
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === 'seatbelt';
@@ -34,6 +36,30 @@ const localBindingConfig = {
     : [],
 };
 
+function veyraRuntimeStatus(): Plugin {
+  return {
+    name: 'veyra-runtime-status',
+    enforce: 'pre' as const,
+    configureServer(server) {
+      server.middlewares.use(async (request, response, next) => {
+        if (request.url?.split('?', 1)[0] !== '/veyra-status.json') {
+          next();
+          return;
+        }
+
+        response.setHeader('Content-Type', 'application/json; charset=utf-8');
+        response.setHeader('Cache-Control', 'no-store');
+        try {
+          response.end(await readFile(VEYRA_STATUS_FILE, 'utf8'));
+        } catch {
+          response.statusCode = 503;
+          response.end(JSON.stringify({ error: 'Veyra runtime status unavailable' }));
+        }
+      });
+    },
+  };
+}
+
 export default defineConfig(async () => {
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
@@ -53,6 +79,7 @@ export default defineConfig(async () => {
         : {}),
     },
     plugins: [
+      veyraRuntimeStatus(),
       vinext(),
       sites(),
       cloudflare({

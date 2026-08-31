@@ -44,6 +44,8 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .mini-row > span:last-child { color: #6f7169; }
 .status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--acid); box-shadow: 0 0 0 4px rgb(217 255 87 / 10%); }
 .status-dot.stopped { background: var(--red); box-shadow: 0 0 0 4px rgb(255 116 95 / 10%); }
+.status-dot.restarting { background: #f1b84b; box-shadow: 0 0 0 4px rgb(241 184 75 / 12%); }
+.status-dot.loading { background: #9b9d94; box-shadow: 0 0 0 4px rgb(155 157 148 / 12%); }
 .agent-card { margin-top: auto; border: 1px solid #353630; background: #20211e; padding: 16px; border-radius: 14px; overflow: hidden; position: relative; }
 .card-glyph { display: inline-grid; place-items: center; min-width: 34px; height: 27px; border-radius: 7px; padding: 0 7px; background: var(--acid); color: var(--ink); font: 700 11px ui-monospace, monospace; }
 .agent-card p { font: 500 16px Georgia, serif; margin: 15px 0 6px; }
@@ -69,6 +71,7 @@ kbd { font-family: inherit; }
 .eyebrow { color: #74766d; margin: 0; }
 .snapshot-label { margin: 0; font-size: 9px; color: #898b82; display: flex; align-items: center; gap: 7px; }
 .snapshot-label span { width: 6px; height: 6px; background: #91b719; border-radius: 50%; }
+.snapshot-label.status-error span { background: var(--red); }
 .hero-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 40px; margin: 25px 0 34px; }
 .hero-row h1 { font: 500 clamp(37px, 4.35vw, 60px)/1 Georgia, "Times New Roman", serif; letter-spacing: -.047em; margin: 0; }
 .hero-row p { color: var(--muted); font-size: 12px; max-width: 590px; margin: 15px 0 0; line-height: 1.65; }
@@ -121,6 +124,7 @@ kbd { font-family: inherit; }
 .version-button { margin-top: 18px; width: 100%; display: flex; justify-content: space-between; border: 0; border-radius: 8px; padding: 11px 12px; background: #f0efe8; font-size: 9px; cursor: pointer; }
 .recent-panel { margin-top: 11px; }
 .recent-list { margin-top: 16px; }
+.loading-copy { margin: 16px 0 0; color: #92948b; font-size: 9px; }
 .recent-row { display: grid; grid-template-columns: 14px 72px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 40px; border-top: 1px solid #ebebe4; }
 .recent-row code { font-size: 8px; color: #74766d; }
 .recent-row p { margin: 0; font-size: 10px; }

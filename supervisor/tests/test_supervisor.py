@@ -1,5 +1,6 @@
 import importlib.machinery
 import importlib.util
+import json
 import os
 import subprocess
 import tempfile
@@ -229,6 +230,49 @@ class DashboardLifecycleTests(unittest.TestCase):
 
         popen.assert_not_called()
 
+    def test_dashboard_status_comes_from_live_repository_and_state(self):
+        root = self.make_root()
+        memory = root / "state" / "memory"
+        memory.mkdir(parents=True)
+        (memory / "provider.json").write_text('{"provider":"openai"}\n')
+        (memory / "models.json").write_text('{"openai":"gpt-live"}\n')
+        (memory / "recent_messages.json").write_text(
+            '{"messages":[{"role":"user"},{"role":"assistant"}]}\n'
+        )
+        (root / "tracked.txt").write_text("version\n")
+        subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "config", "user.name", "Veyra Test"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(root), "config", "user.email", "test@veyra.local"],
+            check=True,
+        )
+        subprocess.run(["git", "-C", str(root), "add", "tracked.txt"], check=True)
+        subprocess.run(
+            ["git", "-C", str(root), "commit", "-q", "-m", "Live version"],
+            check=True,
+        )
+        revision = supervisor.current_revision(root)
+        process = mock.Mock(pid=4321)
+        process.poll.return_value = None
+
+        supervisor.write_dashboard_status(root, revision, process, "running")
+
+        value = json.loads(
+            (root / "state" / supervisor.DASHBOARD_STATUS_FILE_NAME)
+            .read_text()
+        )
+        self.assertEqual(value["agent"], {"pid": 4321, "state": "running"})
+        self.assertEqual(value["revision"]["commit"], revision)
+        self.assertEqual(value["revision"]["message"], "Live version")
+        self.assertEqual(value["revision"]["branch"], "main")
+        self.assertEqual(value["runtime"]["provider"], "openai")
+        self.assertEqual(value["runtime"]["model"], "gpt-live")
+        self.assertEqual(value["runtime"]["recent_message_count"], 2)
+        self.assertEqual(value["versions"][0]["message"], "Live version")
+
     def test_supervisor_stops_dashboard_when_veyra_stops(self):
         root = self.make_root()
         agent = root / "agent"
@@ -250,6 +294,7 @@ class DashboardLifecycleTests(unittest.TestCase):
             ),
             mock.patch.object(supervisor, "stop_agent") as stop_agent,
             mock.patch.object(supervisor, "stop_dashboard") as stop_dashboard,
+            mock.patch.object(supervisor, "write_dashboard_status") as write_status,
             mock.patch.object(supervisor.signal, "signal"),
             mock.patch.object(supervisor.os, "close"),
         ):
@@ -257,6 +302,9 @@ class DashboardLifecycleTests(unittest.TestCase):
 
         stop_dashboard.assert_called_once_with(dashboard_process)
         stop_agent.assert_called_once_with(agent_process)
+        self.assertEqual(write_status.call_count, 2)
+        self.assertEqual(write_status.call_args_list[0].args[-1], "running")
+        self.assertEqual(write_status.call_args_list[1].args[-1], "stopped")
 
 
 if __name__ == "__main__":

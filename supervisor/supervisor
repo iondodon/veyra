@@ -3,6 +3,7 @@
 """Run the agent stored in the repository's checked-out Git commit."""
 
 import fcntl
+import json
 import os
 import signal
 import shutil
@@ -17,6 +18,8 @@ RESTART_DELAY_SECONDS = 1.0
 STOP_TIMEOUT_SECONDS = 5.0
 LOCK_FILE_NAME = "supervisor.lock"
 DASHBOARD_DIR_NAME = "web"
+DASHBOARD_STATUS_FILE_NAME = "dashboard.json"
+DASHBOARD_STATUS_INTERVAL_SECONDS = 5.0
 
 
 class SupervisorError(RuntimeError):
@@ -208,6 +211,141 @@ def start_dashboard(root: Path) -> subprocess.Popen | None:
         return None
 
 
+def read_json_object(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def recent_versions(root: Path, limit: int = 8) -> list[dict[str, str]]:
+    try:
+        output = run_git(
+            root,
+            "log",
+            f"-{limit}",
+            "--format=%h%x1f%s%x1f%cI",
+        )
+    except SupervisorError:
+        return []
+
+    versions = []
+    for line in output.splitlines():
+        parts = line.split("\x1f", 2)
+        if len(parts) != 3:
+            continue
+        commit, message, committed_at = parts
+        versions.append({
+            "commit": commit,
+            "message": message,
+            "committed_at": committed_at,
+        })
+    return versions
+
+
+def revision_details(root: Path, revision: str) -> dict[str, str] | None:
+    try:
+        output = run_git(
+            root,
+            "show",
+            "-s",
+            "--format=%s%x1f%cI",
+            revision,
+        )
+    except SupervisorError:
+        return None
+
+    parts = output.split("\x1f", 1)
+    if len(parts) != 2:
+        return None
+    return {"message": parts[0], "committed_at": parts[1]}
+
+
+def dashboard_status(
+    root: Path,
+    revision: str,
+    process: subprocess.Popen,
+    state: str,
+) -> dict:
+    memory = root / "state" / "memory"
+    provider_data = read_json_object(memory / "provider.json")
+    models_data = read_json_object(memory / "models.json")
+    conversation_data = read_json_object(memory / "recent_messages.json")
+
+    provider = provider_data.get("provider")
+    if not isinstance(provider, str):
+        provider = None
+
+    model = models_data.get(provider) if provider else None
+    if not isinstance(model, str):
+        model = None
+
+    messages = conversation_data.get("messages")
+    message_count = len(messages) if isinstance(messages, list) else 0
+
+    try:
+        branch = run_git(root, "branch", "--show-current") or "detached"
+    except SupervisorError:
+        branch = "unknown"
+
+    versions = recent_versions(root)
+    current = revision_details(root, revision)
+    is_running = state == "running" and process.poll() is None
+
+    return {
+        "schema_version": 1,
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "agent": {
+            "state": "running" if is_running else state,
+            "pid": process.pid if is_running else None,
+        },
+        "revision": {
+            "commit": revision,
+            "short": short_revision(revision),
+            "branch": branch,
+            "message": current["message"] if current else "",
+            "committed_at": current["committed_at"] if current else None,
+        },
+        "runtime": {
+            "provider": provider,
+            "model": model,
+            "recent_message_count": message_count,
+        },
+        "versions": versions,
+    }
+
+
+def write_dashboard_status(
+    root: Path,
+    revision: str,
+    process: subprocess.Popen,
+    state: str,
+) -> None:
+    dashboard = root / DASHBOARD_DIR_NAME
+    if not (dashboard / "package.json").is_file():
+        return
+
+    state_directory = root / "state"
+    path = state_directory / DASHBOARD_STATUS_FILE_NAME
+    temporary = state_directory / f".{DASHBOARD_STATUS_FILE_NAME}.tmp"
+
+    try:
+        state_directory.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(
+            json.dumps(
+                dashboard_status(root, revision, process, state),
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+    except OSError as exc:
+        log(f"could not update dashboard status: {exc}")
+
+
 def stop_dashboard(process: subprocess.Popen | None) -> None:
     if process is None:
         return
@@ -266,7 +404,9 @@ def main() -> int:
         return 1
 
     process = start_agent(agent, active_revision)
+    write_dashboard_status(root, active_revision, process, "running")
     dashboard = start_dashboard(root)
+    last_dashboard_status_update = time.monotonic()
     shutting_down = False
     last_rejection: tuple[str, str] | None = None
 
@@ -303,15 +443,24 @@ def main() -> int:
                         f"{short_revision(active_revision)} -> "
                         f"{short_revision(requested_revision)}"
                     )
+                    write_dashboard_status(
+                        root, active_revision, process, "restarting"
+                    )
                     stop_agent(process)
                     agent = candidate
                     active_revision = requested_revision
                     last_rejection = None
                     process = start_agent(agent, active_revision)
+                    write_dashboard_status(
+                        root, active_revision, process, "running"
+                    )
                     continue
 
             if process.poll() is not None:
                 code = process.returncode
+                write_dashboard_status(
+                    root, active_revision, process, "restarting"
+                )
                 if requested_revision != active_revision or agent_changes(root):
                     log(
                         f"agent at {short_revision(active_revision)} exited with "
@@ -328,6 +477,9 @@ def main() -> int:
                 if shutting_down:
                     break
                 process = start_agent(agent, active_revision)
+                write_dashboard_status(
+                    root, active_revision, process, "running"
+                )
                 continue
 
             if dashboard is not None and dashboard.poll() is not None:
@@ -341,8 +493,14 @@ def main() -> int:
                     break
                 dashboard = start_dashboard(root)
 
+            now = time.monotonic()
+            if now - last_dashboard_status_update >= DASHBOARD_STATUS_INTERVAL_SECONDS:
+                write_dashboard_status(root, active_revision, process, "running")
+                last_dashboard_status_update = now
+
             time.sleep(POLL_INTERVAL_SECONDS)
     finally:
+        write_dashboard_status(root, active_revision, process, "stopped")
         stop_dashboard(dashboard)
         stop_agent(process)
         os.close(lock)
