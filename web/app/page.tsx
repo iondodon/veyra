@@ -1,16 +1,35 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-type Section = 'Overview' | 'Conversations' | 'Evolution' | 'Memory' | 'System';
+type Section =
+  | 'Overview'
+  | 'Screen'
+  | 'Conversations'
+  | 'Evolution'
+  | 'Memory'
+  | 'System';
 
 const navItems: { label: Section; number: string; symbol: string }[] = [
   { label: 'Overview', number: '01', symbol: '⌂' },
-  { label: 'Conversations', number: '02', symbol: '◫' },
-  { label: 'Evolution', number: '03', symbol: '↗' },
-  { label: 'Memory', number: '04', symbol: '◇' },
-  { label: 'System', number: '05', symbol: '⌁' },
+  { label: 'Screen', number: '02', symbol: '▣' },
+  { label: 'Conversations', number: '03', symbol: '◫' },
+  { label: 'Evolution', number: '04', symbol: '↗' },
+  { label: 'Memory', number: '05', symbol: '◇' },
+  { label: 'System', number: '06', symbol: '⌁' },
 ];
+
+type ScreenStatus = {
+  schema_version: number;
+  available: boolean;
+  tool: string | null;
+  stream_path: string;
+  settings: { fps: number; quality: number; scale: number };
+  viewers: number;
+  frames: number;
+  last_frame_at: string | null;
+  error: string | null;
+};
 
 type RuntimeStatus = {
   schema_version: number;
@@ -55,6 +74,11 @@ const sectionIntro: Record<Section, { eyebrow: string; title: string; copy: stri
     title: 'Your agent, at a glance.',
     copy: 'See the current version, runtime state, model, and the local knowledge Veyra carries forward.',
   },
+  Screen: {
+    eyebrow: 'Desktop / Live view',
+    title: 'Watch the screen as it happens.',
+    copy: 'The desktop streams here while this page is open, and capture stops the moment you close it.',
+  },
   Conversations: {
     eyebrow: 'Communication / Conversations',
     title: 'The thread stays close.',
@@ -76,6 +100,13 @@ const sectionIntro: Record<Section, { eyebrow: string; title: string; copy: stri
     copy: 'Review the supervisor state, provider readiness, and private-network access from one place.',
   },
 };
+
+const SCREEN_STREAM_PATH = '/veyra-screen.mjpeg';
+const SCREEN_STATUS_PATH = '/veyra-screen.json';
+// Replacing the stream with an inert image aborts the request, which is what
+// tells the server to stop capturing the desktop.
+const IDLE_PIXEL =
+  'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
 function copyText(value: string, onDone: () => void) {
   if (navigator.clipboard?.writeText) {
@@ -244,12 +275,15 @@ export default function Home() {
             </div>
             {section === 'System' ? (
               <button className="primary-button" onClick={() => copy('./supervisor/supervisor', 'Startup command copied')}><span>↗</span> Copy start command</button>
+            ) : section === 'Screen' ? (
+              <button className="primary-button" onClick={() => copy(`${window.location.origin}${SCREEN_STREAM_PATH}`, 'Stream address copied')}><span>↗</span> Copy stream address</button>
             ) : (
               <button className="primary-button" onClick={() => navigate('System')}><span>+</span> Open local status</button>
             )}
           </section>
 
           {section === 'Overview' && <Overview runtime={runtime} onNavigate={navigate} onCopy={copy} />}
+          {section === 'Screen' && <Screen onCopy={copy} />}
           {section === 'Conversations' && <Conversations runtime={runtime} onCopy={copy} />}
           {section === 'Evolution' && <Evolution runtime={runtime} />}
           {section === 'Memory' && <Memory runtime={runtime} />}
@@ -359,6 +393,143 @@ function Overview({ runtime, onNavigate, onCopy }: { runtime: RuntimeStatus | nu
         </div>
       </section>
     </>
+  );
+}
+
+function Screen({ onCopy }: { onCopy: (value: string, message: string) => void }) {
+  const [attempt, setAttempt] = useState(0);
+
+  // Remounting on retry restarts the view from its initial state, which opens
+  // a fresh stream instead of reusing the closed one.
+  return (
+    <LiveScreen
+      key={attempt}
+      onCopy={onCopy}
+      onRetry={() => setAttempt((value) => value + 1)}
+    />
+  );
+}
+
+function LiveScreen({ onCopy, onRetry }: { onCopy: (value: string, message: string) => void; onRetry: () => void }) {
+  const imageRef = useRef<HTMLImageElement | null>(null);
+  const seenFrames = useRef<number | null>(null);
+  const [stage, setStage] = useState<'connecting' | 'live' | 'stopped'>('connecting');
+  const [status, setStatus] = useState<ScreenStatus | null>(null);
+  const [resolution, setResolution] = useState('');
+
+  const readScreenStatus = useCallback(async () => {
+    try {
+      const response = await fetch(`${SCREEN_STATUS_PATH}?t=${Date.now()}`, {
+        cache: 'no-store',
+      });
+      if (!response.ok) throw new Error(`status ${response.status}`);
+      const value = (await response.json()) as ScreenStatus;
+      const previous = seenFrames.current;
+      seenFrames.current = value.frames;
+      setStatus(value);
+
+      // A browser reports only the first frame of a multipart stream, so the
+      // server's frame counter is what tells us the view is still moving.
+      if (!value.available || (previous !== null && value.frames === previous)) {
+        setStage('stopped');
+      }
+    } catch {
+      setStatus(null);
+      setStage('stopped');
+    }
+  }, []);
+
+  // The stream opens with this view and closes with it. Leaving the section or
+  // closing the page drops the connection, and the last viewer to leave stops
+  // the capture loop on the server.
+  useEffect(() => {
+    const image = imageRef.current;
+    if (!image) return;
+
+    image.src = `${SCREEN_STREAM_PATH}?t=${Date.now()}`;
+    return () => {
+      image.src = IDLE_PIXEL;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (stage === 'stopped') return;
+    const initial = window.setTimeout(() => void readScreenStatus(), 0);
+    const interval = window.setInterval(() => void readScreenStatus(), 3000);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(interval);
+    };
+  }, [stage, readScreenStatus]);
+
+  const onFrame = () => {
+    const image = imageRef.current;
+    if (!image || image.naturalWidth <= 1) return;
+    setResolution(`${image.naturalWidth} × ${image.naturalHeight}`);
+    setStage((current) => (current === 'stopped' ? current : 'live'));
+  };
+
+  const settings = status?.settings;
+  const badge = stage === 'live' ? 'live-badge' : stage === 'connecting' ? 'live-badge waiting' : 'live-badge offline';
+  const badgeLabel = stage === 'live' ? 'Live' : stage === 'connecting' ? 'Connecting' : 'Stopped';
+
+  return (
+    <section className="screen-layout">
+      <article className="panel screen-panel">
+        <div className="panel-head">
+          <div><p className="panel-kicker">Live view</p><h2>This desktop, right now</h2></div>
+          <span className={badge}><span className="live-dot" />{badgeLabel}</span>
+        </div>
+
+        <div className="screen-stage">
+          {/* eslint-disable-next-line @next/next/no-img-element -- a multipart
+              stream must stay a plain element; next/image cannot carry it. */}
+          <img ref={imageRef} alt="Live view of the local desktop" onLoad={onFrame} onError={() => setStage('stopped')} />
+          {stage !== 'live' && (
+            <div className="screen-overlay">
+              {stage === 'connecting' ? (
+                <>
+                  <span className="screen-pulse" />
+                  <h3>Opening the live view…</h3>
+                  <p>Waiting for the first frame from the local desktop.</p>
+                </>
+              ) : (
+                <>
+                  <h3>The live view stopped.</h3>
+                  <p>{status?.error ?? 'The stream closed, and the desktop is no longer being captured.'}</p>
+                  <button className="overlay-button" onClick={onRetry}>Reconnect <span>↻</span></button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="screen-meta">
+          <span>{resolution ? `Streaming at ${resolution}` : 'Resolution pending'}</span>
+          <span>{settings ? `${settings.fps} frames per second · JPEG quality ${settings.quality}` : 'Reading capture settings…'}</span>
+          <span>{status?.tool ? `Captured with ${status.tool}` : 'Capture utility unknown'}</span>
+        </div>
+      </article>
+
+      <aside className="screen-aside">
+        <article className="panel compact-panel">
+          <div className="panel-head"><div><p className="panel-kicker">Capture</p><h2>Stream detail</h2></div></div>
+          <dl className="detail-list">
+            <div><dt>Utility</dt><dd>{status?.tool ?? '—'}</dd></div>
+            <div><dt>Frame rate</dt><dd>{settings ? `${settings.fps}/s` : '—'}</dd></div>
+            <div><dt>Output scale</dt><dd>{settings ? `${Math.round(settings.scale * 100)}%` : '—'}</dd></div>
+            <div><dt>Viewers</dt><dd>{status?.viewers ?? '—'}</dd></div>
+          </dl>
+          <button className="version-button" onClick={() => onCopy(`${window.location.origin}${SCREEN_STREAM_PATH}`, 'Stream address copied')}>Copy stream address <span>↗</span></button>
+        </article>
+
+        <article className="panel principle-card dark-card">
+          <span className="feature-glyph lime">eye/</span>
+          <h2>Only while you watch.</h2>
+          <p>Nothing is recorded and no frame is written to disk. The desktop is captured on demand, and the last viewer to leave ends it.</p>
+        </article>
+      </aside>
+    </section>
   );
 }
 

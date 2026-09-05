@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import vinext from 'vinext';
 import { defineConfig, type Plugin } from 'vite';
 import hostingConfig from './.openai/hosting.json';
+import { veyraScreenStream } from './server/screen';
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   '00000000-0000-4000-8000-000000000000';
@@ -80,6 +81,7 @@ export default defineConfig(async () => {
     },
     plugins: [
       veyraRuntimeStatus(),
+      veyraScreenStream(),
       vinext(),
       sites(),
       cloudflare({
