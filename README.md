@@ -19,6 +19,7 @@ veyra/
 │   ├── requirements.txt
 │   └── initial_prompt.md
 ├── supervisor/     # stable lifecycle and recovery boundary
+├── web/            # optional local workspace; Telegram remains the chat interface
 ├── state/          # persistent local state, ignored by Git
 └── workspace/      # local development area, ignored by Git
 ```
@@ -101,6 +102,35 @@ bot token: a second agent is answered with `409 Conflict`, and two pollers
 that keep retrying terminate each other's long poll until neither receives
 a message. If a running agent reports `Another Veyra is already polling
 this bot token`, stop the other one.
+
+## Local web workspace
+
+The optional `web/` app is a companion to the Telegram conversation. It shows
+the recent context Veyra retains, its active Git version and recent commits,
+provider and model settings, and a live desktop view. Messages prepared in the
+workspace are drafts: copy them into your Veyra chat in Telegram to send them.
+Drafts remain in the current browser tab across navigation and reloads.
+
+With Node.js 22.13 or newer installed, prepare the workspace once:
+
+```bash
+cd web
+npm ci
+```
+
+The supervisor starts the workspace automatically at `http://localhost:3000`
+when the web app is present. For UI development, run `npm run dev` from `web/`
+without starting a second copy of the workspace. Runtime status comes from
+the supervisor; an absent or outdated snapshot is shown as disconnected.
+The local state and desktop endpoints run with the development server.
+
+Optionally set `NEXT_PUBLIC_TELEGRAM_BOT_USERNAME` in `web/.env.local` to your
+bot's username so **Open Telegram** opens its chat directly. Without it, the
+button opens Telegram's web client. See `web/.env.example` for the settings.
+
+Desktop capture starts with **Start watching** and stops when you stop watching,
+leave the desktop view, or close the tab, provided no other viewer is connected.
+Frames are streamed without being recorded.
 
 ## Evolving the agent through chat
 

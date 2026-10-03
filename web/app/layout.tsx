@@ -5,8 +5,9 @@ const siteOrigin = process.env.NEXT_PUBLIC_SITE_ORIGIN ?? 'http://localhost:3000
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteOrigin),
-  title: 'Veyra — Local agent dashboard',
-  description: 'A private command center for your self-evolving local AI agent.',
+  title: 'Veyra — Agent workspace',
+  description: 'Conversation context, version history, and the live desktop of your evolving local agent.',
+  icons: { icon: '/favicon.svg' },
   openGraph: {
     title: 'Veyra — Local agent dashboard',
     description: 'A private command center for your self-evolving local AI agent.',

@@ -1,650 +1,234 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Icon, Mark, type IconName } from './icons';
+import { isConversationContext, isRuntimeStatus, isScreenStatus, isRuntimeStale, type ConversationContext, type RuntimeStatus, type ScreenStatus } from '../lib/veyra';
 
-type Section =
-  | 'Overview'
-  | 'Screen'
-  | 'Conversations'
-  | 'Evolution'
-  | 'Memory'
-  | 'System';
-
-const navItems: { label: Section; number: string; symbol: string }[] = [
-  { label: 'Overview', number: '01', symbol: '⌂' },
-  { label: 'Screen', number: '02', symbol: '▣' },
-  { label: 'Conversations', number: '03', symbol: '◫' },
-  { label: 'Evolution', number: '04', symbol: '↗' },
-  { label: 'Memory', number: '05', symbol: '◇' },
-  { label: 'System', number: '06', symbol: '⌁' },
+type View = 'Conversation' | 'Desktop' | 'Evolution' | 'Memory' | 'Runtime';
+type DataState = 'loading' | 'ready' | 'error';
+type Copy = (value: string, message?: string) => Promise<void>;
+const views: { label: View; icon: IconName }[] = [
+  { label: 'Conversation', icon: 'chat' }, { label: 'Desktop', icon: 'screen' },
+  { label: 'Evolution', icon: 'branch' }, { label: 'Memory', icon: 'memory' }, { label: 'Runtime', icon: 'runtime' },
 ];
-
-type ScreenStatus = {
-  schema_version: number;
-  available: boolean;
-  tool: string | null;
-  stream_path: string;
-  settings: { fps: number; quality: number; scale: number };
-  viewers: number;
-  frames: number;
-  last_frame_at: string | null;
-  error: string | null;
-};
-
-type RuntimeStatus = {
-  schema_version: number;
-  updated_at: string;
-  agent: { state: 'running' | 'restarting' | 'stopped'; pid: number | null };
-  revision: {
-    commit: string;
-    short: string;
-    branch: string;
-    message: string;
-    committed_at: string | null;
-  };
-  runtime: {
-    provider: string | null;
-    model: string | null;
-    recent_message_count: number;
-  };
-  versions: { commit: string; message: string; committed_at: string }[];
-};
-
-function titleCase(value: string | null | undefined, fallback = 'Not selected') {
-  if (!value) return fallback;
-  return value.charAt(0).toUpperCase() + value.slice(1);
-}
+const botUsername = (process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME ?? '').replace(/^@/, '');
+const telegramUrl = /^[a-zA-Z0-9_]{5,32}$/.test(botUsername) ? `https://t.me/${botUsername}` : 'https://web.telegram.org/';
+const IDLE_PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
 function relativeTime(value: string | null | undefined) {
-  if (!value) return 'Unknown time';
-  const elapsed = Date.now() - new Date(value).getTime();
-  if (!Number.isFinite(elapsed)) return 'Unknown time';
-  const minutes = Math.max(0, Math.floor(elapsed / 60_000));
+  if (!value || !Number.isFinite(Date.parse(value))) return 'Time unavailable';
+  const minutes = Math.max(0, Math.floor((Date.now() - Date.parse(value)) / 60_000));
   if (minutes < 1) return 'just now';
   if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}h ago`;
+  return `${Math.floor(minutes / 1440)}d ago`;
+}
+function formatDate(value: string | null | undefined) {
+  return value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'Time unavailable';
+}
+function providerName(value: string | null | undefined) {
+  return value === 'openai' ? 'OpenAI' : value === 'anthropic' ? 'Anthropic' : value || 'Not selected';
 }
 
-const sectionIntro: Record<Section, { eyebrow: string; title: string; copy: string }> = {
-  Overview: {
-    eyebrow: 'Local intelligence / Overview',
-    title: 'Your agent, at a glance.',
-    copy: 'See the current version, runtime state, model, and the local knowledge Veyra carries forward.',
-  },
-  Screen: {
-    eyebrow: 'Desktop / Live view',
-    title: 'Watch the screen as it happens.',
-    copy: 'The desktop streams here while this page is open, and capture stops the moment you close it.',
-  },
-  Conversations: {
-    eyebrow: 'Communication / Conversations',
-    title: 'The thread stays close.',
-    copy: 'Veyra uses Telegram as its owner-only interface and keeps a bounded local context for continuity.',
-  },
-  Evolution: {
-    eyebrow: 'Versions / Evolution',
-    title: 'Every change has a history.',
-    copy: 'Each durable version is an ordinary Git commit, tested before the supervisor activates it.',
-  },
-  Memory: {
-    eyebrow: 'Knowledge / Memory',
-    title: 'Small, durable, local.',
-    copy: 'Preferences and runtime choices live beside the agent without becoming part of its source history.',
-  },
-  System: {
-    eyebrow: 'Operations / System',
-    title: 'A clear local boundary.',
-    copy: 'Review the supervisor state, provider readiness, and private-network access from one place.',
-  },
-};
-
-const SCREEN_STREAM_PATH = '/veyra-screen.mjpeg';
-const SCREEN_STATUS_PATH = '/veyra-screen.json';
-// Replacing the stream with an inert image aborts the request, which is what
-// tells the server to stop capturing the desktop.
-const IDLE_PIXEL =
-  'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-
-function copyText(value: string, onDone: () => void) {
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(value).then(onDone).catch(() => fallbackCopy(value, onDone));
-    return;
-  }
-  fallbackCopy(value, onDone);
-}
-
-function fallbackCopy(value: string, onDone: () => void) {
-  const field = document.createElement('textarea');
-  field.value = value;
-  field.style.position = 'fixed';
-  field.style.opacity = '0';
-  document.body.appendChild(field);
-  field.select();
-  document.execCommand('copy');
-  field.remove();
-  onDone();
+function useLocalState() {
+  const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
+  const [context, setContext] = useState<ConversationContext | null>(null);
+  const [runtimeState, setRuntimeState] = useState<DataState>('loading');
+  const [contextState, setContextState] = useState<DataState>('loading');
+  const [refreshing, setRefreshing] = useState(false);
+  const [now, setNow] = useState(0);
+  const controller = useRef<AbortController | null>(null);
+  const refresh = useCallback(async () => {
+    if (controller.current) return;
+    const request = new AbortController();
+    controller.current = request;
+    setRefreshing(true);
+    const get = async (path: string) => {
+      const response = await fetch(path, { cache: 'no-store', signal: AbortSignal.any([request.signal, AbortSignal.timeout(8000)]) });
+      if (!response.ok) throw new Error('Local state unavailable');
+      return response.json();
+    };
+    const [status, memory] = await Promise.allSettled([get('/veyra-status.json'), get('/veyra-context.json')]);
+    if (!request.signal.aborted) {
+      if (status.status === 'fulfilled' && isRuntimeStatus(status.value)) { setRuntime(status.value); setRuntimeState('ready'); }
+      else setRuntimeState('error');
+      if (memory.status === 'fulfilled' && isConversationContext(memory.value)) { setContext(memory.value); setContextState('ready'); }
+      else setContextState('error');
+      setNow(Date.now());
+      setRefreshing(false);
+    }
+    if (controller.current === request) controller.current = null;
+  }, []);
+  useEffect(() => {
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => { await refresh(); if (alive) timer = setTimeout(poll, 3000); };
+    void poll();
+    return () => { alive = false; clearTimeout(timer); controller.current?.abort(); controller.current = null; };
+  }, [refresh]);
+  const stale = !!runtime && isRuntimeStale(runtime, now);
+  return { runtime, context, runtimeState, contextState, refresh, refreshing, stale, connected: runtimeState === 'ready' && !stale };
 }
 
 export default function Home() {
-  const [section, setSection] = useState<Section>('Overview');
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [query, setQuery] = useState('');
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const [view, setView] = useState<View>('Conversation');
   const [toast, setToast] = useState('');
-  const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
-  const [statusError, setStatusError] = useState(false);
-  const intro = sectionIntro[section];
-
-  const refreshStatus = useCallback(async () => {
+  const data = useLocalState();
+  const { runtime, context, connected } = data;
+  const running = connected && runtime?.agent.state === 'running';
+  const stateLabel = data.runtimeState === 'loading' ? 'Connecting' : !connected ? 'Disconnected' : running ? 'Agent online' : runtime?.agent.state === 'restarting' ? 'Agent restarting' : 'Agent stopped';
+  useEffect(() => {
+    const onHash = () => {
+      const next = views.find((item) => item.label.toLowerCase() === window.location.hash.slice(1).toLowerCase());
+      if (next) setView(next.label);
+      else if (!window.location.hash) setView('Conversation');
+    };
+    onHash();
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+  useEffect(() => { if (!toast) return; const timer = setTimeout(() => setToast(''), 3500); return () => clearTimeout(timer); }, [toast]);
+  const navigate = (next: View) => { setView(next); window.location.hash = next.toLowerCase(); };
+  const copy: Copy = async (value, message = 'Copied to clipboard') => {
     try {
-      const response = await fetch(`/veyra-status.json?t=${Date.now()}`, {
-        cache: 'no-store',
-      });
-      if (!response.ok) throw new Error(`status ${response.status}`);
-      const value = (await response.json()) as RuntimeStatus;
-      if (value.schema_version !== 1) throw new Error('unsupported status');
-      setRuntime(value);
-      setStatusError(false);
-    } catch {
-      setStatusError(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-        event.preventDefault();
-        setSearchOpen((open) => !open);
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(value);
+      else {
+        const field = document.createElement('textarea');
+        const previous = document.activeElement as HTMLElement | null;
+        field.value = value;
+        field.style.position = 'fixed'; field.style.opacity = '0';
+        document.body.appendChild(field); field.select();
+        const copied = document.execCommand('copy'); field.remove(); previous?.focus();
+        if (!copied) throw new Error('Clipboard unavailable');
       }
-      if (event.key === 'Escape') {
-        setSearchOpen(false);
-        setMobileOpen(false);
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
-
-  useEffect(() => {
-    const initial = window.setTimeout(() => void refreshStatus(), 0);
-    const interval = window.setInterval(() => void refreshStatus(), 3000);
-    return () => {
-      window.clearTimeout(initial);
-      window.clearInterval(interval);
-    };
-  }, [refreshStatus]);
-
-  useEffect(() => {
-    if (!toast) return;
-    const timeout = window.setTimeout(() => setToast(''), 2300);
-    return () => window.clearTimeout(timeout);
-  }, [toast]);
-
-  const filteredNav = useMemo(
-    () => navItems.filter(({ label }) => label.toLowerCase().includes(query.toLowerCase())),
-    [query],
-  );
-
-  const navigate = (next: Section) => {
-    setSection(next);
-    setSearchOpen(false);
-    setMobileOpen(false);
-    setQuery('');
+      setToast(message);
+    } catch { setToast('Could not copy. Select the text and copy it manually.'); }
   };
-
-  const copy = (value: string, message: string) => copyText(value, () => setToast(message));
-  const agentRunning = runtime?.agent.state === 'running';
-  const agentState = runtime?.agent.state ?? 'stopped';
-
-  return (
-    <main className="app-shell">
-      <aside className={mobileOpen ? 'sidebar mobile-open' : 'sidebar'}>
-        <div className="brand-lockup">
-          <span className="brand-mark">v</span>
-          <span>veyra</span>
-          <button className="sidebar-close" onClick={() => setMobileOpen(false)} aria-label="Close menu">×</button>
-        </div>
-
-        <nav aria-label="Main navigation" className="main-nav">
-          <p className="nav-label">Workspace</p>
-          {navItems.map(({ label, number, symbol }) => (
-            <button
-              className={section === label ? 'nav-item active' : 'nav-item'}
-              key={label}
-              onClick={() => navigate(label)}
-            >
-              <span className="nav-main"><i aria-hidden="true">{symbol}</i>{label}</span>
-              <span className="nav-number">{number}</span>
-            </button>
-          ))}
-        </nav>
-
-        <div className="sidebar-meta">
-          <p className="nav-label">Local instance</p>
-          <button className="mini-row" onClick={() => navigate('System')}>
-            <span className={`status-dot ${agentRunning ? '' : agentState}`} />
-            <span>
-              <b>{runtime ? `Agent ${agentState}` : 'Reading agent state'}</b>
-              <small>{agentRunning ? `PID ${runtime.agent.pid}` : statusError ? 'Live status unavailable' : 'Waiting for supervisor'}</small>
-            </span>
-            <span>→</span>
-          </button>
-        </div>
-
-        <div className="agent-card">
-          <span className="card-glyph">v/</span>
-          <p>Private by design.</p>
-          <small>This dashboard listens on your local network and has not been published.</small>
-        </div>
-      </aside>
-
-      {mobileOpen && <button className="sidebar-backdrop" onClick={() => setMobileOpen(false)} aria-label="Close menu" />}
-
-      <section className="workspace">
-        <header className="topbar">
-          <div className="topbar-left">
-            <button className="menu-trigger" onClick={() => setMobileOpen(true)} aria-label="Open menu">☰</button>
-            <button className="search-trigger" onClick={() => setSearchOpen(true)} aria-label="Open search">
-              <span className="search-icon">⌕</span>
-              <span>Search Veyra</span>
-              <kbd>⌘ K</kbd>
-            </button>
-          </div>
-          <div className="topbar-actions">
-            <button className="sync-button" onClick={() => void refreshStatus()}><span>↻</span> Refresh live data</button>
-            <button className="quiet-button" aria-label="About this dashboard" title="Local dashboard">i</button>
-            <div className="owner-avatar" aria-label="Owner profile">ID</div>
-          </div>
-        </header>
-
-        <div className="content">
-          <div className="eyebrow-row">
-            <p className="eyebrow">{intro.eyebrow}</p>
-            <p className={`snapshot-label ${statusError ? 'status-error' : ''}`}>
-              <span /> {statusError ? 'Live data unavailable' : runtime ? `Updated ${relativeTime(runtime.updated_at)}` : 'Connecting…'}
-            </p>
-          </div>
-
-          <section className="hero-row">
-            <div>
-              <h1>{intro.title}</h1>
-              <p>{intro.copy}</p>
-            </div>
-            {section === 'System' ? (
-              <button className="primary-button" onClick={() => copy('./supervisor/supervisor', 'Startup command copied')}><span>↗</span> Copy start command</button>
-            ) : section === 'Screen' ? (
-              <button className="primary-button" onClick={() => copy(`${window.location.origin}${SCREEN_STREAM_PATH}`, 'Stream address copied')}><span>↗</span> Copy stream address</button>
-            ) : (
-              <button className="primary-button" onClick={() => navigate('System')}><span>+</span> Open local status</button>
-            )}
-          </section>
-
-          {section === 'Overview' && <Overview runtime={runtime} onNavigate={navigate} onCopy={copy} />}
-          {section === 'Screen' && <Screen onCopy={copy} />}
-          {section === 'Conversations' && <Conversations runtime={runtime} onCopy={copy} />}
-          {section === 'Evolution' && <Evolution runtime={runtime} />}
-          {section === 'Memory' && <Memory runtime={runtime} />}
-          {section === 'System' && <System runtime={runtime} onCopy={copy} />}
-        </div>
-      </section>
-
-      {searchOpen && (
-        <div className="command-layer" role="presentation" onMouseDown={() => setSearchOpen(false)}>
-          <section className="command-palette" role="dialog" aria-modal="true" aria-label="Search Veyra" onMouseDown={(e) => e.stopPropagation()}>
-            <form onSubmit={(event: FormEvent) => event.preventDefault()}>
-              <span>⌕</span>
-              <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Where do you want to go?" aria-label="Search sections" />
-              <kbd>esc</kbd>
-            </form>
-            <p className="command-label">Navigate</p>
-            <div className="command-results">
-              {filteredNav.map(({ label, symbol }) => (
-                <button key={label} onClick={() => navigate(label)}><span className="result-icon">{symbol}</span><span>{label}<small>{sectionIntro[label].eyebrow.split(' / ')[0]}</small></span><i>↵</i></button>
-              ))}
-              {!filteredNav.length && <p className="empty-result">No matching section.</p>}
-            </div>
-            <footer><span>Veyra local dashboard</span><span><kbd>↑</kbd><kbd>↓</kbd> to move</span></footer>
-          </section>
-        </div>
-      )}
-
-      {toast && <div className="toast" role="status"><span>✓</span>{toast}</div>}
+  return <div className="app-shell">
+    <a className="skip-link" href="#workspace">Skip to workspace</a>
+    <header className="app-header">
+      <a className="brand" href="#conversation" aria-label="Veyra conversation"><Mark /><span>veyra<span className="brand-caption">local workspace</span></span></a>
+      <div className="header-actions"><span className={`agent-status ${running ? 'online' : ''}`}><span className="status-dot" />{stateLabel}</span><button className={`icon-button ${data.refreshing ? 'refreshing' : ''}`} aria-label="Refresh local state" title="Refresh local state" onClick={() => void data.refresh()} disabled={data.refreshing}><Icon name="refresh" /></button><a className="button telegram-button" href={telegramUrl} target="_blank" rel="noreferrer"><Icon name="telegram" /><span>Open Telegram</span></a></div>
+    </header>
+    <div className="workspace-heading"><div><p className="eyebrow">YOUR INSTANCE</p><h1>Agent workspace<span className="heading-dot">.</span></h1></div><div className="revision-pill"><Icon name="branch" /><span>{runtime?.revision.branch ?? 'Local repository'}</span><code>{runtime?.revision.short ?? '—'}</code></div></div>
+    <nav className="view-nav" aria-label="Workspace views">{views.map(({ label, icon }) => <a key={label} href={`#${label.toLowerCase()}`} className={view === label ? 'view-link active' : 'view-link'} aria-current={view === label ? 'page' : undefined} onClick={() => setView(label)}><Icon name={icon} />{label}{label === 'Conversation' && context && <span className="nav-count">{context.messages.length}</span>}</a>)}<span className="nav-note">{connected ? 'Updates every 3 seconds' : 'Local state'}</span></nav>
+    <main id="workspace" className="workspace" tabIndex={-1}>
+      {data.runtimeState !== 'loading' && !connected && <div className="connection-notice" role="status"><Icon name="runtime" /><p>{data.stale && data.runtimeState === 'ready' ? 'The supervisor snapshot is out of date.' : 'Live runtime status is unavailable.'}<span> {runtime ? 'Showing the last known version and settings.' : 'Start Veyra to see its active version and settings.'}</span></p><button className="text-button" onClick={() => navigate('Runtime')}>View runtime</button></div>}
+      <div className="workspace-grid"><div className="main-column">
+        {view === 'Conversation' && <Conversation context={context} state={data.contextState} onCopy={copy} onRefresh={data.refresh} />}
+        {view === 'Desktop' && <Desktop onCopy={copy} />}
+        {view === 'Evolution' && <Evolution runtime={runtime} state={data.runtimeState} connected={connected} onCopy={copy} />}
+        {view === 'Memory' && <Memory runtime={runtime} context={context} contextState={data.contextState} onCopy={copy} />}
+        {view === 'Runtime' && <Runtime runtime={runtime} stateLabel={stateLabel} connected={connected} onCopy={copy} />}
+      </div><aside className="inspector" aria-label="Agent details">
+        <section className="panel version-card"><div className="panel-heading"><h2><Icon name="branch" />{runtime ? connected ? 'Active version' : 'Last known version' : 'Agent version'}</h2><span className="small-label">{runtime ? 'GIT COMMIT' : 'AWAITING STATUS'}</span></div><code className="version-hash">{runtime?.revision.short ?? '— — —'}</code><p className="version-message">{runtime?.revision.message ?? 'The supervisor reports the active commit here.'}</p><div className="version-meta"><span title={formatDate(runtime?.revision.committed_at)}>{runtime ? relativeTime(runtime.revision.committed_at) : 'No snapshot yet'}</span>{runtime && <button className="icon-button" aria-label="Copy version commit" title="Copy commit" onClick={() => void copy(runtime.revision.commit)}><Icon name="copy" width="15" height="15" /></button>}</div><button className="panel-link" onClick={() => navigate('Evolution')}>View version history<Icon name="branch" width="16" height="16" /></button></section>
+        <section className="panel settings-card"><div className="panel-heading"><h2>Model & context</h2><Icon name="memory" /></div><dl className="details"><div><dt>Provider</dt><dd>{runtime ? providerName(runtime.runtime.provider) : 'Unavailable'}</dd></div><div><dt>Model</dt><dd className="model-value">{runtime ? runtime.runtime.model ?? 'Not selected' : 'Unavailable'}</dd></div><div><dt>Retained messages</dt><dd>{context ? `${context.messages.length} / ${context.limit}` : 'Unavailable'}</dd></div></dl><button className="panel-link" onClick={() => navigate('Memory')}>Inspect memory<Icon name="memory" width="16" height="16" /></button></section>
+        <section className="evolution-note"><span className="eyebrow">SHAPED BY YOU</span><h2>A conversation.<br />A better next version.</h2><p>Describe a change in Telegram. Veyra builds and tests it, then commits its next version.</p><ol className="evolution-steps"><li><span>01</span>Ask</li><li><span>02</span>Test</li><li><span>03</span>Commit</li></ol><span className="note-footer">The supervisor activates tested commits.</span></section>
+        {view !== 'Desktop' && <button className="desktop-shortcut" onClick={() => navigate('Desktop')}><Icon name="screen" /><span>See the local desktop<small>Capture starts when you choose to watch.</small></span><Icon name="play" width="16" height="16" /></button>}
+      </aside></div>
     </main>
-  );
+    <footer className="app-footer"><span><Mark small />Local agent. Ordinary Git history.</span><span>{runtime ? `Snapshot ${relativeTime(runtime.updated_at)}` : 'Waiting for supervisor'}<span className="footer-divider">/</span>Telegram is your chat interface</span></footer>
+    {toast && <div className="toast" role="status"><Icon name="copy" />{toast}<button className="icon-button" onClick={() => setToast('')} aria-label="Dismiss notification"><Icon name="close" width="16" height="16" /></button></div>}
+  </div>;
 }
 
-function Overview({ runtime, onNavigate, onCopy }: { runtime: RuntimeStatus | null; onNavigate: (section: Section) => void; onCopy: (value: string, message: string) => void }) {
-  const running = runtime?.agent.state === 'running';
-  const state = runtime?.agent.state ?? 'loading';
-  const versions = runtime?.versions ?? [];
-  const provider = titleCase(runtime?.runtime.provider);
-  const model = runtime?.runtime.model ?? 'Not selected';
-
-  return (
-    <>
-      <section className="metric-grid" aria-label="Agent metrics">
-        <article className="metric-card dark-card">
-          <div className="metric-head"><span>Agent state</span><span className="metric-icon">⌁</span></div>
-          <strong>{titleCase(state, 'Loading…')}</strong>
-          <p><span className={`status-dot ${running ? '' : state}`} /> {running ? `Supervisor process ${runtime.agent.pid}` : runtime ? 'Supervisor is restarting the agent' : 'Reading live supervisor state'}</p>
-        </article>
-        <article className="metric-card">
-          <div className="metric-head"><span>Recent context</span><span className="metric-icon">◫</span></div>
-          <strong>{runtime?.runtime.recent_message_count ?? '—'}</strong>
-          <p>messages retained locally</p>
-        </article>
-        <article className="metric-card">
-          <div className="metric-head"><span>Current version</span><span className="metric-icon">↗</span></div>
-          <strong className="mono-value">{runtime?.revision.short ?? '—'}</strong>
-          <p>latest checked-out commit</p>
-        </article>
-        <article className="metric-card accent-card">
-          <div className="metric-head"><span>Selected model</span><span className="metric-icon">✦</span></div>
-          <strong>{model}</strong>
-          <p>{provider} · {runtime?.runtime.model ? 'configured' : 'not configured'}</p>
-        </article>
-      </section>
-
-      <section className="overview-grid">
-        <article className="panel readiness-panel">
-          <div className="panel-head">
-            <div><p className="panel-kicker">Readiness</p><h2>Local runtime</h2></div>
-            <button className="text-button" onClick={() => onNavigate('System')}>Full status <span>→</span></button>
-          </div>
-          <div className="readiness-list">
-            <StatusRow label="Provider selected" detail={provider} state={runtime?.runtime.provider ? 'ready' : 'attention'} />
-            <StatusRow label="Model configured" detail={model} state={runtime?.runtime.model ? 'ready' : 'attention'} />
-            <StatusRow label="Agent process" detail={running ? `Running as PID ${runtime.agent.pid}` : titleCase(state)} state={running ? 'ready' : 'attention'} />
-            <StatusRow label="Dashboard exposure" detail="Private LAN only" state="ready" />
-          </div>
-          <button className="command-strip" onClick={() => onCopy('./supervisor/supervisor', 'Startup command copied')}>
-            <code>./supervisor/supervisor</code><span>Copy start command</span>
-          </button>
-        </article>
-
-        <article className="panel version-preview">
-          <div className="panel-head">
-            <div><p className="panel-kicker">Evolution</p><h2>Current version</h2></div>
-            <span className="safe-badge">Live HEAD</span>
-          </div>
-          <div className="version-number">{runtime?.revision.short ?? 'Loading…'}</div>
-          <p className="commit-message">{runtime?.revision.message || 'Reading the current commit message…'}</p>
-          <div className="version-meta"><span>{runtime ? `Committed ${relativeTime(runtime.revision.committed_at)}` : 'Loading time'}</span><span>{runtime?.revision.branch ?? '—'}</span></div>
-          <button className="version-button" onClick={() => onNavigate('Evolution')}>View evolution history <span>→</span></button>
-        </article>
-      </section>
-
-      <section className="panel recent-panel">
-        <div className="panel-head">
-          <div><p className="panel-kicker">Recent changes</p><h2>How Veyra has evolved</h2></div>
-          <button className="text-button" onClick={() => onNavigate('Evolution')}>See all versions <span>→</span></button>
-        </div>
-        <div className="recent-list">
-          {versions.slice(0, 3).map((version, index) => (
-            <div className="recent-row" key={version.commit}>
-              <span className={index === 0 ? 'timeline-dot newest' : 'timeline-dot'} />
-              <code>{version.commit}</code><p>{version.message}</p><time>{relativeTime(version.committed_at)}</time>
-            </div>
-          ))}
-          {!versions.length && <p className="loading-copy">Reading version history…</p>}
-        </div>
-      </section>
-    </>
-  );
+function EmptyState({ icon, title, children }: { icon: IconName; title: string; children: React.ReactNode }) {
+  return <div className="empty-state"><span className="empty-icon"><Icon name={icon} width="28" height="28" /></span><h3>{title}</h3><div>{children}</div></div>;
 }
 
-function Screen({ onCopy }: { onCopy: (value: string, message: string) => void }) {
+function Conversation({ context, state, onCopy, onRefresh }: { context: ConversationContext | null; state: DataState; onCopy: Copy; onRefresh: () => Promise<void> }) {
+  const [draft, setDraft] = useState('');
+  const [draftLoaded, setDraftLoaded] = useState(false);
+  const feed = useRef<HTMLDivElement>(null);
+  const followLatest = useRef(true);
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  const messages = context?.messages ?? [];
+  const transcript = JSON.stringify(messages);
+  useEffect(() => { try { setDraft(sessionStorage.getItem('veyra-message-draft') ?? ''); } catch { /* Storage is optional. */ } setDraftLoaded(true); }, []);
+  useEffect(() => { if (draftLoaded) { try { sessionStorage.setItem('veyra-message-draft', draft); } catch { /* Keep draft in memory. */ } } }, [draft, draftLoaded]);
+  useEffect(() => { if (feed.current && followLatest.current) feed.current.scrollTop = feed.current.scrollHeight; }, [transcript]);
+  const prepare = (value: string) => { setDraft(value); textarea.current?.focus(); };
+  const starters = [['Improve a capability', 'I want you to improve a capability: '], ['Remember a preference', 'Remember this preference for future conversations: '], ['Review your setup', 'Review your current setup and suggest the most useful next improvement.']];
+  return <section className="panel conversation-panel" aria-labelledby="conversation-title">
+    <div className="surface-heading"><div><p className="eyebrow">CONTINUITY ACROSS VERSIONS</p><h2 id="conversation-title">Recent conversation</h2></div><span className="subtle-badge"><Icon name="telegram" width="14" height="14" />Telegram</span></div>
+    <div className="context-caption"><span>Context Veyra carries into its next version</span><span>{context ? `${messages.length} of ${context.limit} messages` : 'Reading memory'}</span></div>
+    {state === 'error' && <div className="inline-notice" role="status">{context ? 'Conversation could not refresh. Showing the last loaded context.' : 'Conversation memory could not be read.'}<button className="text-button" onClick={() => void onRefresh()}>Retry</button></div>}
+    <div className="conversation-feed" ref={feed} role="region" aria-label="Retained conversation" tabIndex={0} onScroll={() => { const element = feed.current; if (element) followLatest.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80; }}>
+      {state === 'loading' && <EmptyState icon="memory" title="Reading local conversation…"><p>Loading the context retained by your agent.</p></EmptyState>}
+      {state !== 'loading' && !messages.length && <EmptyState icon="chat" title={state === 'error' ? 'Context is unavailable' : 'The next version starts with a conversation.'}><p>{state === 'error' ? 'Use Retry to read local memory again.' : 'Talk to Veyra in Telegram. Your recent exchange will appear here and stay with the agent across restarts.'}</p></EmptyState>}
+      {messages.map((message, index) => <article className={`message ${message.role}`} key={`${index}-${message.role}`}><div className="message-avatar">{message.role === 'assistant' ? <Mark small /> : 'Y'}</div><div className="message-body"><div className="message-heading"><strong>{message.role === 'user' ? 'You' : 'Veyra'}</strong>{message.commit && <code title={`Version ${message.commit}`}>{message.commit.slice(0, 12)}</code>}<button className="message-copy icon-button" aria-label={`Copy ${message.role === 'user' ? 'your' : 'Veyra’s'} message ${index + 1}`} title="Copy message" onClick={() => void onCopy(message.content)}><Icon name="copy" width="14" height="14" /></button></div><div className="message-text">{message.content}</div></div></article>)}
+      {!!messages.length && <div className="feed-end"><span />End of retained context<span /></div>}
+    </div>
+    <form className="draft-composer" onSubmit={(event) => { event.preventDefault(); if (draft.trim()) void onCopy(draft.trim(), 'Message copied. Paste it into your Veyra chat in Telegram.'); }}><div className="composer-heading"><label htmlFor="message-draft">Prepare your next message</label><span>Draft only · saved in this tab</span></div><div className="draft-input"><textarea id="message-draft" ref={textarea} value={draft} onChange={(event) => setDraft(event.target.value)} rows={3} placeholder="What would you like Veyra to do or become?" /><div className="composer-actions"><span>Copy, then send in Telegram.</span><button className="button primary-button" type="submit" disabled={!draft.trim()}><Icon name="copy" width="16" height="16" />Copy message</button></div></div><div className="prompt-starters">{starters.map(([label, value]) => <button key={label} type="button" onClick={() => prepare(value)}>{label}</button>)}</div></form>
+  </section>;
+}
+
+function Desktop({ onCopy }: { onCopy: Copy }) {
+  const [watching, setWatching] = useState(false);
   const [attempt, setAttempt] = useState(0);
-
-  // Remounting on retry restarts the view from its initial state, which opens
-  // a fresh stream instead of reusing the closed one.
-  return (
-    <LiveScreen
-      key={attempt}
-      onCopy={onCopy}
-      onRetry={() => setAttempt((value) => value + 1)}
-    />
-  );
+  return <section className="panel desktop-panel"><div className="surface-heading"><div><p className="eyebrow">YOUR COMPUTER</p><h2>Live desktop</h2></div>{watching && <button className="button small-button" onClick={() => setWatching(false)}><Icon name="pause" width="16" height="16" />Stop watching</button>}</div>
+    {watching ? <LiveDesktop key={attempt} onRetry={() => setAttempt((value) => value + 1)} /> : <div className="desktop-idle"><div className="monitor-outline"><Icon name="screen" width="56" height="56" /></div><h3>A view into Veyra’s workspace.</h3><p>Watch the local desktop while the agent works.<br />Screen capture runs only while someone is watching.</p><button className="button primary-button" onClick={() => setWatching(true)}><Icon name="play" width="16" height="16" />Start watching</button></div>}
+    <div className="desktop-footnote"><Icon name="screen" width="16" height="16" /><div><p>View only. Direct the agent and approve actions in Telegram. Frames are streamed without being saved to disk.</p><button className="text-button" onClick={() => void onCopy(`${window.location.origin}/veyra-screen.mjpeg`, 'Stream address copied')}>Copy stream address</button></div></div>
+  </section>;
 }
 
-function LiveScreen({ onCopy, onRetry }: { onCopy: (value: string, message: string) => void; onRetry: () => void }) {
-  const imageRef = useRef<HTMLImageElement | null>(null);
-  const seenFrames = useRef<number | null>(null);
+function LiveDesktop({ onRetry }: { onRetry: () => void }) {
+  const image = useRef<HTMLImageElement>(null);
+  const stageElement = useRef<HTMLDivElement>(null);
   const [stage, setStage] = useState<'connecting' | 'live' | 'stopped'>('connecting');
   const [status, setStatus] = useState<ScreenStatus | null>(null);
+  const [error, setError] = useState('');
   const [resolution, setResolution] = useState('');
-
-  const readScreenStatus = useCallback(async () => {
-    try {
-      const response = await fetch(`${SCREEN_STATUS_PATH}?t=${Date.now()}`, {
-        cache: 'no-store',
-      });
-      if (!response.ok) throw new Error(`status ${response.status}`);
-      const value = (await response.json()) as ScreenStatus;
-      const previous = seenFrames.current;
-      seenFrames.current = value.frames;
-      setStatus(value);
-
-      // A browser reports only the first frame of a multipart stream, so the
-      // server's frame counter is what tells us the view is still moving.
-      if (!value.available || (previous !== null && value.frames === previous)) {
-        setStage('stopped');
-      }
-    } catch {
-      setStatus(null);
-      setStage('stopped');
-    }
-  }, []);
-
-  // The stream opens with this view and closes with it. Leaving the section or
-  // closing the page drops the connection, and the last viewer to leave stops
-  // the capture loop on the server.
+  const started = useRef(0);
+  useEffect(() => { const element = image.current; if (!element) return; started.current = Date.now(); element.src = `/veyra-screen.mjpeg?t=${started.current}`; return () => { element.src = IDLE_PIXEL; }; }, []);
   useEffect(() => {
-    const image = imageRef.current;
-    if (!image) return;
-
-    image.src = `${SCREEN_STREAM_PATH}?t=${Date.now()}`;
-    return () => {
-      image.src = IDLE_PIXEL;
+    if (stage === 'stopped') { if (image.current) image.current.src = IDLE_PIXEL; return; }
+    const request = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const response = await fetch('/veyra-screen.json', { cache: 'no-store', signal: AbortSignal.any([request.signal, AbortSignal.timeout(8000)]) });
+        if (!response.ok) throw new Error('Screen status unavailable');
+        const value = await response.json();
+        if (!isScreenStatus(value)) throw new Error('Unsupported screen status');
+        if (request.signal.aborted) return;
+        setStatus(value);
+        const lastFrame = value.last_frame_at ? Date.parse(value.last_frame_at) : 0;
+        if (!value.available || (Date.now() - started.current > 12_000 && Date.now() - lastFrame > 12_000)) { setError(value.error || 'No recent desktop frames were received.'); setStage('stopped'); return; }
+      } catch { if (request.signal.aborted) return; setError('The screen stream could not be reached.'); setStage('stopped'); return; }
+      if (!request.signal.aborted) timer = setTimeout(poll, 3000);
     };
-  }, []);
-
-  useEffect(() => {
-    if (stage === 'stopped') return;
-    const initial = window.setTimeout(() => void readScreenStatus(), 0);
-    const interval = window.setInterval(() => void readScreenStatus(), 3000);
-    return () => {
-      window.clearTimeout(initial);
-      window.clearInterval(interval);
-    };
-  }, [stage, readScreenStatus]);
-
-  const onFrame = () => {
-    const image = imageRef.current;
-    if (!image || image.naturalWidth <= 1) return;
-    setResolution(`${image.naturalWidth} × ${image.naturalHeight}`);
-    setStage((current) => (current === 'stopped' ? current : 'live'));
-  };
-
-  const settings = status?.settings;
-  const badge = stage === 'live' ? 'live-badge' : stage === 'connecting' ? 'live-badge waiting' : 'live-badge offline';
-  const badgeLabel = stage === 'live' ? 'Live' : stage === 'connecting' ? 'Connecting' : 'Stopped';
-
-  return (
-    <section className="screen-layout">
-      <article className="panel screen-panel">
-        <div className="panel-head">
-          <div><p className="panel-kicker">Live view</p><h2>This desktop, right now</h2></div>
-          <span className={badge}><span className="live-dot" />{badgeLabel}</span>
-        </div>
-
-        <div className="screen-stage">
-          {/* eslint-disable-next-line @next/next/no-img-element -- a multipart
-              stream must stay a plain element; next/image cannot carry it. */}
-          <img ref={imageRef} alt="Live view of the local desktop" onLoad={onFrame} onError={() => setStage('stopped')} />
-          {stage !== 'live' && (
-            <div className="screen-overlay">
-              {stage === 'connecting' ? (
-                <>
-                  <span className="screen-pulse" />
-                  <h3>Opening the live view…</h3>
-                  <p>Waiting for the first frame from the local desktop.</p>
-                </>
-              ) : (
-                <>
-                  <h3>The live view stopped.</h3>
-                  <p>{status?.error ?? 'The stream closed, and the desktop is no longer being captured.'}</p>
-                  <button className="overlay-button" onClick={onRetry}>Reconnect <span>↻</span></button>
-                </>
-              )}
-            </div>
-          )}
-        </div>
-
-        <div className="screen-meta">
-          <span>{resolution ? `Streaming at ${resolution}` : 'Resolution pending'}</span>
-          <span>{settings ? `${settings.fps} frames per second · JPEG quality ${settings.quality}` : 'Reading capture settings…'}</span>
-          <span>{status?.tool ? `Captured with ${status.tool}` : 'Capture utility unknown'}</span>
-        </div>
-      </article>
-
-      <aside className="screen-aside">
-        <article className="panel compact-panel">
-          <div className="panel-head"><div><p className="panel-kicker">Capture</p><h2>Stream detail</h2></div></div>
-          <dl className="detail-list">
-            <div><dt>Utility</dt><dd>{status?.tool ?? '—'}</dd></div>
-            <div><dt>Frame rate</dt><dd>{settings ? `${settings.fps}/s` : '—'}</dd></div>
-            <div><dt>Output scale</dt><dd>{settings ? `${Math.round(settings.scale * 100)}%` : '—'}</dd></div>
-            <div><dt>Viewers</dt><dd>{status?.viewers ?? '—'}</dd></div>
-          </dl>
-          <button className="version-button" onClick={() => onCopy(`${window.location.origin}${SCREEN_STREAM_PATH}`, 'Stream address copied')}>Copy stream address <span>↗</span></button>
-        </article>
-
-        <article className="panel principle-card dark-card">
-          <span className="feature-glyph lime">eye/</span>
-          <h2>Only while you watch.</h2>
-          <p>Nothing is recorded and no frame is written to disk. The desktop is captured on demand, and the last viewer to leave ends it.</p>
-        </article>
-      </aside>
-    </section>
-  );
+    void poll();
+    return () => { request.abort(); clearTimeout(timer); };
+  }, [stage]);
+  return <><div className="stream-toolbar"><span className={`stream-status ${stage}`}><span className="status-dot" />{stage === 'live' ? 'Live view' : stage === 'connecting' ? 'Connecting' : 'Stream stopped'}</span><button className="icon-button" aria-label="View desktop fullscreen" title="Fullscreen" disabled={stage !== 'live'} onClick={() => void stageElement.current?.requestFullscreen?.().catch(() => setError('Fullscreen is unavailable in this browser.'))}><Icon name="expand" /></button></div>
+    <div className="screen-stage" ref={stageElement}>
+      {/* A multipart MJPEG stream requires a native image element. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img ref={image} alt="Live local desktop" onLoad={() => { if (image.current && image.current.naturalWidth > 1) { setResolution(`${image.current.naturalWidth} × ${image.current.naturalHeight}`); setStage((current) => current === 'stopped' ? current : 'live'); } }} onError={() => { setError('The desktop stream closed. Reconnect to try again.'); setStage('stopped'); }} />
+      {stage !== 'live' && <div className="screen-overlay"><Icon name="screen" width="36" height="36" /><h3>{stage === 'connecting' ? 'Connecting to the desktop…' : 'Live view stopped'}</h3><p>{stage === 'connecting' ? 'Waiting for the first frame.' : error}</p>{stage === 'stopped' && <button className="button primary-button" onClick={onRetry}><Icon name="refresh" width="16" height="16" />Reconnect</button>}</div>}
+    </div><div className="stream-meta"><span>{resolution || 'Waiting for resolution'}</span><span>{status ? `${status.settings.fps} fps · ${Math.round(status.settings.scale * 100)}% scale` : 'Reading capture settings'}</span><span>{status?.tool ?? 'Local capture'}</span></div>{stage === 'live' && error && <p className="inline-notice" role="status">{error}</p>}</>;
 }
 
-function Conversations({ runtime, onCopy }: { runtime: RuntimeStatus | null; onCopy: (value: string, message: string) => void }) {
-  const messageCount = runtime?.runtime.recent_message_count;
-
-  return (
-    <section className="two-column-page">
-      <article className="panel feature-panel conversation-feature">
-        <div className="feature-glyph">tg/</div>
-        <p className="panel-kicker">Primary interface</p>
-        <h2>Telegram keeps Veyra within reach.</h2>
-        <p className="feature-copy">The owner can talk to the agent, switch providers or models, and approve staged desktop actions without opening this dashboard.</p>
-        <div className="detail-pills"><span>Owner-only</span><span>Long polling</span><span>{messageCount ?? '—'} messages retained</span></div>
-        <button className="primary-button compact" onClick={() => onCopy('/provider', 'Provider command copied')}><span>+</span> Copy provider command</button>
-      </article>
-      <div className="stacked-panels">
-        <article className="panel compact-panel">
-          <div className="panel-head"><div><p className="panel-kicker">Local context</p><h2>Recent messages</h2></div><strong className="big-number">{messageCount ?? '—'}</strong></div>
-          <div className="progress-track"><span style={{ width: messageCount == null ? '0%' : `${Math.min(100, messageCount * 5)}%` }} /></div>
-          <p className="support-copy">Veyra keeps a bounded recent history locally for conversational continuity.</p>
-        </article>
-        <article className="panel compact-panel">
-          <p className="panel-kicker">Available commands</p>
-          <div className="command-list">
-            {[['/provider', 'Choose OpenAI or Anthropic'], ['/model', 'Change the active model'], ['/codex', 'Stage a Codex prompt'], ['/claude', 'Stage a Claude prompt']].map(([command, detail]) => (
-              <button key={command} onClick={() => onCopy(command, `${command} copied`)}><code>{command}</code><span>{detail}</span><i>+</i></button>
-            ))}
-          </div>
-        </article>
-      </div>
-    </section>
-  );
-}
-
-function Evolution({ runtime }: { runtime: RuntimeStatus | null }) {
+function Evolution({ runtime, state, connected, onCopy }: { runtime: RuntimeStatus | null; state: DataState; connected: boolean; onCopy: Copy }) {
   const versions = runtime?.versions ?? [];
-
-  return (
-    <section className="evolution-layout">
-      <article className="panel evolution-list-panel">
-        <div className="panel-head"><div><p className="panel-kicker">Version history</p><h2>Recent commits</h2></div><span className="branch-badge">{runtime?.revision.branch ?? '—'}</span></div>
-        <div className="commit-timeline">
-          {versions.map((version, index) => (
-            <div className="commit-row" key={version.commit}>
-              <div className="commit-rail"><span className={runtime?.revision.commit.startsWith(version.commit) ? 'commit-dot current' : 'commit-dot'} /></div>
-              <div className="commit-body"><div><p>{version.message}</p>{runtime?.revision.commit.startsWith(version.commit) && <span>Active</span>}{index === 0 && !runtime?.revision.commit.startsWith(version.commit) && <span>HEAD</span>}</div><code>{version.commit}</code><time>{relativeTime(version.committed_at)}</time></div>
-            </div>
-          ))}
-          {!versions.length && <p className="loading-copy">Reading Git history…</p>}
-        </div>
-      </article>
-      <aside className="evolution-aside">
-        <article className="panel principle-card dark-card">
-          <span className="feature-glyph lime">git/</span>
-          <h2>Version means commit.</h2>
-          <p>Veyra never invents version identifiers. The checked-out commit is the version, and HEAD is the version pointer.</p>
-        </article>
-        <article className="panel compact-panel">
-          <p className="panel-kicker">Activation path</p>
-          <ol className="activation-list"><li><span>01</span>Commit detected</li><li><span>02</span>Self-test runs</li><li><span>03</span>Supervisor switches</li></ol>
-        </article>
-      </aside>
-    </section>
-  );
+  return <section className="panel evolution-panel"><div className="surface-heading"><div><p className="eyebrow">EVERY VERSION IS A COMMIT</p><h2>Evolution history</h2></div><span className="subtle-badge"><Icon name="branch" width="14" height="14" />{runtime?.revision.branch ?? 'Git'}</span></div><p className="surface-copy">Changes requested in chat become tested commits. The supervisor reports the version it has activated.</p><div className="commit-timeline">{versions.map((version) => {
+    const active = runtime?.revision.commit.startsWith(version.commit);
+    return <article className={`commit-row ${active ? 'current' : ''}`} key={version.commit}><span className="commit-node"><Icon name={active ? 'check' : 'branch'} width="14" height="14" /></span><div className="commit-content"><div className="commit-labels"><code>{version.commit}</code>{active && <span className="version-badge">{connected ? 'Active version' : 'Last active version'}</span>}</div><h3>{version.message}</h3><time dateTime={version.committed_at} title={formatDate(version.committed_at)}>{formatDate(version.committed_at)}</time></div><button className="icon-button" aria-label={`Copy commit ${version.commit}`} title="Copy commit" onClick={() => void onCopy(version.commit)}><Icon name="copy" width="16" height="16" /></button></article>;
+  })}{!versions.length && <EmptyState icon="branch" title={state === 'loading' ? 'Reading version history…' : 'Version history is unavailable'}><p>The supervisor supplies recent commits with its runtime snapshot.</p></EmptyState>}</div>{runtime && !versions.some((version) => runtime.revision.commit.startsWith(version.commit)) && <div className="inline-notice">The last reported active commit is {runtime.revision.short}. It is outside this recent history.</div>}<div className="recovery-note"><Icon name="terminal" /><div><h3>Recovery stays in your hands.</h3><p>Stop the supervisor and check out a known working commit when recovery is needed. A failed candidate self-test keeps the current agent running.</p></div></div></section>;
 }
 
-function Memory({ runtime }: { runtime: RuntimeStatus | null }) {
-  return (
-    <>
-      <section className="memory-grid">
-        <article className="panel memory-card"><span className="memory-icon">◎</span><p className="panel-kicker">Provider</p><h2>{titleCase(runtime?.runtime.provider)}</h2><p>Selected provider for the local instance.</p><code>provider.json</code></article>
-        <article className="panel memory-card accent-memory"><span className="memory-icon">✦</span><p className="panel-kicker">Model</p><h2>{runtime?.runtime.model ?? 'Not selected'}</h2><p>Remembered separately for each provider.</p><code>models.json</code></article>
-        <article className="panel memory-card"><span className="memory-icon">◫</span><p className="panel-kicker">Recent context</p><h2>{runtime ? `${runtime.runtime.recent_message_count} messages` : 'Loading…'}</h2><p>Bounded conversation history stored locally.</p><code>recent_messages.json</code></article>
-      </section>
-      <section className="panel boundary-panel">
-        <div><p className="panel-kicker">A useful boundary</p><h2>Memory is state, not source.</h2></div>
-        <p>Runtime choices and conversation context remain under <code>state/</code>. They survive restarts, but they are ignored by Git and never become part of Veyra’s initial version.</p>
-        <div className="boundary-mark">local<br />only</div>
-      </section>
-    </>
-  );
+function Memory({ runtime, context, contextState, onCopy }: { runtime: RuntimeStatus | null; context: ConversationContext | null; contextState: DataState; onCopy: Copy }) {
+  return <section className="panel memory-panel"><div className="surface-heading"><div><p className="eyebrow">PERSISTENT LOCAL STATE</p><h2>What Veyra carries forward</h2></div><Icon name="memory" width="24" height="24" /></div><p className="surface-copy">Conversation context and runtime choices survive agent restarts and version changes.</p>
+    <div className="memory-record"><div className="record-icon"><Icon name="chat" /></div><div><h3>Recent conversation</h3><p>{context ? `${context.messages.length} messages retained, up to a limit of ${context.limit}.` : contextState === 'loading' ? 'Reading local conversation…' : 'Conversation memory is unavailable.'}</p><code>state/memory/recent_messages.json</code></div></div>
+    <div className="memory-record"><div className="record-icon"><Icon name="code" /></div><div><h3>Selected provider</h3><p>{runtime ? providerName(runtime.runtime.provider) : 'Unavailable'}</p><code>state/memory/provider.json</code></div><button className="button small-button" onClick={() => void onCopy('/provider', 'Command copied. Send it to Veyra in Telegram.')}><Icon name="copy" width="14" height="14" />/provider</button></div>
+    <div className="memory-record"><div className="record-icon"><Icon name="memory" /></div><div><h3>Selected model</h3><p>{runtime ? runtime.runtime.model ?? 'Not selected' : 'Unavailable'}<span className="muted"> · remembered per provider</span></p><code>state/memory/models.json</code></div><button className="button small-button" onClick={() => void onCopy('/model', 'Command copied. Send it to Veyra in Telegram.')}><Icon name="copy" width="14" height="14" />/model</button></div>
+    <div className="memory-boundary"><Icon name="memory" /><div><h3>Memory is separate from source history.</h3><p>These files live under <code>state/</code> and are ignored by Git. Changing a provider or model does not create a new agent version.</p></div></div></section>;
 }
 
-function System({ runtime, onCopy }: { runtime: RuntimeStatus | null; onCopy: (value: string, message: string) => void }) {
-  const running = runtime?.agent.state === 'running';
-
-  return (
-    <section className="system-grid">
-      <article className="panel system-status-card dark-card">
-        <div className="system-orbit"><span>v</span></div>
-        <p className="panel-kicker">Supervisor</p>
-        <h2>{runtime ? `Veyra is ${runtime.agent.state}.` : 'Reading Veyra state…'}</h2>
-        <p>{running ? `The supervisor owns agent process ${runtime.agent.pid} and will restart it if needed.` : runtime ? 'The supervisor is transitioning the agent process.' : 'Waiting for the supervisor runtime snapshot.'}</p>
-        <button className="light-button" onClick={() => onCopy('./supervisor/supervisor', 'Startup command copied')}>Copy startup command <span>→</span></button>
-      </article>
-      <div className="system-details">
-        <article className="panel compact-panel">
-          <div className="panel-head"><div><p className="panel-kicker">Network</p><h2>Private access</h2></div><span className="safe-badge">LAN only</span></div>
-          <dl className="detail-list"><div><dt>Listen address</dt><dd>0.0.0.0</dd></div><div><dt>Dashboard port</dt><dd>3000</dd></div><div><dt>Public deployment</dt><dd>None</dd></div></dl>
-          <button className="version-button" onClick={() => onCopy(window.location.origin, 'Dashboard address copied')}>Copy this dashboard address <span>↗</span></button>
-        </article>
-        <article className="panel compact-panel">
-          <p className="panel-kicker">Safety checks</p>
-          <div className="readiness-list small">
-            <StatusRow label="Single-instance lock" detail="Enforced" state="ready" />
-            <StatusRow label="Agent self-test" detail="Required" state="ready" />
-            <StatusRow label="Checked-out version" detail={runtime?.revision.short ?? 'Reading…'} state={runtime ? 'ready' : 'attention'} />
-          </div>
-        </article>
-      </div>
-    </section>
-  );
-}
-
-function StatusRow({ label, detail, state }: { label: string; detail: string; state: 'ready' | 'attention' }) {
-  return <div className="status-row"><span className={`check-dot ${state}`}>{state === 'ready' ? '✓' : '!'}</span><p><b>{label}</b><small>{detail}</small></p><span className="row-arrow">→</span></div>;
+function Runtime({ runtime, stateLabel, connected, onCopy }: { runtime: RuntimeStatus | null; stateLabel: string; connected: boolean; onCopy: Copy }) {
+  return <section className="panel runtime-panel"><div className="surface-heading"><div><p className="eyebrow">LIFECYCLE & CONTROL</p><h2>Local runtime</h2></div><span className={`runtime-state ${connected && runtime?.agent.state === 'running' ? 'online' : ''}`}>{stateLabel}</span></div><dl className="runtime-details"><div><dt>Agent process</dt><dd>{runtime?.agent.pid ? `${connected ? 'PID' : 'Last known PID'} ${runtime.agent.pid}` : 'No running process reported'}</dd></div><div><dt>Supervisor snapshot</dt><dd>{runtime ? formatDate(runtime.updated_at) : 'Unavailable'}</dd></div><div><dt>Active commit</dt><dd><code>{runtime?.revision.short ?? 'Unavailable'}</code></dd></div><div><dt>Branch</dt><dd>{runtime?.revision.branch ?? 'Unavailable'}</dd></div></dl>
+    <div className="startup-block"><div><h3>Start your local instance</h3><p>Run from the repository root when Veyra is stopped.</p></div><button className="code-button" onClick={() => void onCopy('./supervisor/supervisor', 'Startup command copied')}><code>./supervisor/supervisor</code><Icon name="copy" width="16" height="16" /></button></div>
+    <div className="runtime-checks"><h3>How the supervisor works</h3><ul><li><Icon name="check" />One supervisor per repository</li><li><Icon name="check" />A clean, Git-tracked agent before startup</li><li><Icon name="check" />Self-test before activating a commit</li><li><Icon name="check" />Current agent stays running if a candidate fails</li></ul></div>
+    <div className="command-directory"><h3>Commands for your Telegram chat</h3>{[['/help', 'List every available command'], ['/provider', 'View or choose your model provider'], ['/model', 'View or change your active model'], ['/screenshot', 'Request a desktop screenshot'], ['/codex ', 'Stage a prompt in an open Codex CLI'], ['/claude ', 'Stage a prompt in an open Claude CLI']].map(([command, detail]) => <button key={command} onClick={() => void onCopy(command, 'Command copied. Paste it into your Veyra chat in Telegram.')}><code>{command.trim()}</code><span>{detail}</span><Icon name="copy" width="15" height="15" /></button>)}</div></section>;
 }
