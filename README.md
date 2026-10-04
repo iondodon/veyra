@@ -129,7 +129,10 @@ with a rebuilt module graph after updates.
 
 The desktop fullscreen control falls back to an in-page maximized view when
 browser fullscreen is unavailable or denied. Use its exit button or Escape to
-return to the workspace.
+return to the workspace. The viewer requests binary-framed JPEGs with
+`/veyra-screen.mjpeg?transport=fetch`: Safari/WebKit can reject native multipart
+responses in Fetch. The direct `/veyra-screen.mjpeg` link remains native MJPEG
+for image viewers. Both transports share the same on-demand capture loop.
 
 Web checks run from `web/`: `npm run lint`, `npx tsc --noEmit`, `npm test`,
 and `npm run build`. For the browser regression suite, install Chromium once

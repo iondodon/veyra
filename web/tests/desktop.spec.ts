@@ -15,7 +15,7 @@ test.beforeAll(async () => {
     const height = url.searchParams.get('height') || '400';
     const frames = await Promise.all(['green', 'blue'].map((background) => sharp({ create: { width: Number(width), height: Number(height), channels: 3, background } }).jpeg().toBuffer()));
     if (response.destroyed) return;
-    response.writeHead(200, { 'Content-Type': 'multipart/x-mixed-replace; boundary=veyraframe', 'Access-Control-Allow-Origin': '*' });
+    response.writeHead(200, { 'Content-Type': url.searchParams.get('transport') === 'fetch' ? 'application/octet-stream' : 'multipart/x-mixed-replace; boundary=veyraframe', 'Access-Control-Allow-Origin': '*' });
     activeStreams++;
     let count = 0;
     const timer = setInterval(() => {
@@ -36,7 +36,7 @@ test.afterAll(async () => {
 
 async function watchDesktop(page: Page, width = 640, height = 400) {
   await page.route('**/veyra-screen.mjpeg?*', (route) => route.fulfill({
-    status: 307, headers: { Location: `${frameOrigin}/?width=${width}&height=${height}` },
+    status: 307, headers: { Location: `${frameOrigin}/?width=${width}&height=${height}&transport=fetch` },
   }));
   await page.route('**/veyra-screen.json', (route) => route.fulfill({ json: {
     schema_version: 1, available: true, tool: 'test', stream_path: '/veyra-screen.mjpeg',
@@ -170,7 +170,7 @@ test('a closed frame stream is reported even when global status says live; recon
   await watchDesktop(page);
   // End the next connection after a few real frames, while status remains healthy.
   await page.route('**/veyra-screen.mjpeg?*', (route) => route.fulfill({
-    status: 307, headers: { Location: `${frameOrigin}/?closeAfter=3` },
+    status: 307, headers: { Location: `${frameOrigin}/?closeAfter=3&transport=fetch` },
   }));
   await page.getByRole('button', { name: 'Stop watching' }).click();
   await page.getByRole('button', { name: 'Start watching' }).click();
@@ -178,8 +178,17 @@ test('a closed frame stream is reported even when global status says live; recon
   await expect(page.getByText('The desktop stream closed. Reconnect to try again.')).toBeVisible();
   await page.unroute('**/veyra-screen.mjpeg?*');
   await page.route('**/veyra-screen.mjpeg?*', (route) => route.fulfill({
-    status: 307, headers: { Location: frameOrigin },
+    status: 307, headers: { Location: `${frameOrigin}/?transport=fetch` },
   }));
   await page.getByRole('button', { name: 'Reconnect', exact: true }).click();
   await expect(page.locator('.stream-status')).toHaveText('Live view');
+});
+
+test('dashboard requests binary framing for Safari-compatible fetch', async ({ page }) => {
+  let transport: string | null = null;
+  page.on('request', (request) => {
+    if (request.url().includes('/veyra-screen.mjpeg')) transport = new URL(request.url()).searchParams.get('transport');
+  });
+  await watchDesktop(page);
+  expect(transport).toBe('fetch');
 });

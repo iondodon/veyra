@@ -210,8 +210,13 @@ function handleStream(request: IncomingMessage, response: ServerResponse) {
   request.socket.setNoDelay(true);
   request.socket.setTimeout(0);
 
+  // WebKit rejects multipart/x-mixed-replace in fetch, even though it can
+  // display it in an img. The dashboard parses the framing itself, so use a
+  // plain binary response for fetch and keep native MJPEG for direct links.
+  const binary = new URL(request.url ?? '/', 'http://localhost').searchParams.get('transport') === 'fetch';
   response.writeHead(200, {
-    'Content-Type': `multipart/x-mixed-replace; boundary=${BOUNDARY}`,
+    'Content-Type': binary ? 'application/octet-stream' : `multipart/x-mixed-replace; boundary=${BOUNDARY}`,
+    'X-Content-Type-Options': 'nosniff',
     'Cache-Control': 'no-store, no-cache, must-revalidate, private',
     Pragma: 'no-cache',
     Connection: 'close',

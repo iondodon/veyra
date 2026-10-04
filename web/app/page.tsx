@@ -221,7 +221,7 @@ function LiveDesktop({ onRetry }: { onRetry: () => void }) {
     started.current = Date.now();
     const watch = async () => {
       try {
-        const response = await fetch(`/veyra-screen.mjpeg?t=${started.current}`, { cache: 'no-store', signal: request.signal });
+        const response = await fetch(`/veyra-screen.mjpeg?t=${started.current}&transport=fetch`, { cache: 'no-store', signal: request.signal });
         if (!response.ok || !response.body) throw new Error('The desktop stream could not be reached.');
         for await (const frame of jpegFrames(response.body)) {
           if (request.signal.aborted) break;

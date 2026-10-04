@@ -10,7 +10,7 @@
     "build": "vinext build",
     "start": "vinext start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "test": "node --experimental-strip-types --test lib/*.test.ts",
+    "test": "node --experimental-strip-types --test lib/*.test.ts server/*.test.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {
