@@ -105,11 +105,10 @@ this bot token`, stop the other one.
 
 ## Local web workspace
 
-The optional `web/` app is a companion to the Telegram conversation. It shows
-the recent context Veyra retains, its active Git version and recent commits,
-provider and model settings, and a live desktop view. Messages prepared in the
-workspace are drafts: copy them into your Veyra chat in Telegram to send them.
-Drafts remain in the current browser tab across navigation and reloads.
+The optional `web/` app is a single-page companion to the Telegram conversation.
+It shows only the active Git version, active model, and live desktop video.
+Chat remains in Telegram. An unavailable runtime snapshot is explicitly labeled
+as last-known information rather than current status.
 
 With Node.js 22.13 or newer installed, prepare the workspace once:
 
@@ -127,12 +126,17 @@ The dashboard sends `Cache-Control: no-store` for development modules and uses
 a dedicated dependency cache so browsers do not mix cached React renderers
 with a rebuilt module graph after updates.
 
-The desktop fullscreen control falls back to an in-page maximized view when
-browser fullscreen is unavailable or denied. Use its exit button or Escape to
-return to the workspace. The viewer requests binary-framed JPEGs with
-`/veyra-screen.mjpeg?transport=fetch`: Safari/WebKit can reject native multipart
-responses in Fetch. The direct `/veyra-screen.mjpeg` link remains native MJPEG
-for image viewers. Both transports share the same on-demand capture loop.
+The desktop fullscreen control opens the video viewer in browser fullscreen,
+using native video fullscreen on iPhone-style browsers. It falls back to an
+explicitly labeled in-page expanded view when fullscreen is unavailable or
+denied. Use its exit button or Escape to return.
+
+Live video requires `ffmpeg` with `libx264` and browser H.264 MediaSource or
+ManagedMediaSource support. `/veyra-screen.mp4` encodes on-demand JPEG captures
+as fragmented MP4, fed into the video element through the browser streaming API.
+The direct `/veyra-screen.mjpeg` endpoint remains available for image viewers.
+Both transports share the same on-demand capture loop. Each video viewer has
+its own encoder, which stops when that viewer disconnects.
 
 Web checks run from `web/`: `npm run lint`, `npx tsc --noEmit`, `npm test`,
 and `npm run build`. For the browser regression suite, install Chromium once
@@ -141,12 +145,8 @@ the local server on port 3000 (or starts it if absent); `VEYRA_TEST_URL` can
 select a different running server. Screen responses are mocked during these
 tests so they do not capture the desktop.
 
-Optionally set `NEXT_PUBLIC_TELEGRAM_BOT_USERNAME` in `web/.env.local` to your
-bot's username so **Open Telegram** opens its chat directly. Without it, the
-button opens Telegram's web client. See `web/.env.example` for the settings.
-
-Desktop capture starts with **Start watching** and stops when you stop watching,
-leave the desktop view, or close the tab, provided no other viewer is connected.
+Desktop capture starts automatically when the page loads and stops when the
+page closes, provided no other viewer is connected.
 Frames are streamed without being recorded.
 
 ## Evolving the agent through chat

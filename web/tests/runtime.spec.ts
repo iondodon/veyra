@@ -10,12 +10,13 @@ test('React modules are fetched fresh across dashboard reloads without hook erro
     }
   });
 
+  await page.route('**/veyra-screen.mp4?*', (route) => route.fulfill({ status: 503, body: 'Synthetic unavailable video' }));
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'Agent workspace.' })).toBeVisible();
-  await page.getByRole('link', { name: 'Desktop', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Start watching' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Veyra', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Maximize video' })).toBeVisible();
   // Vite's dependency URLs can survive a restart even when their transitive
   // module graph changes. Never retain an immutable renderer from an old graph.
+  await expect(page.getByRole('button', { name: 'Reconnect' })).toBeVisible();
   const dependencies = await page.evaluate(() => performance.getEntriesByType('resource')
     .map((entry) => entry.name)
     .filter((url) => /\/node_modules\/\.vite-veyra\/deps\/react(?:-dom_client)?\.js\?/.test(url)));
@@ -27,10 +28,8 @@ test('React modules are fetched fresh across dashboard reloads without hook erro
 
   for (let i = 0; i < 3; i++) {
     await page.reload();
-    await expect(page.getByRole('heading', { name: 'Agent workspace.' })).toBeVisible();
-    await page.getByRole('link', { name: 'Desktop', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Start watching' })).toBeVisible();
-    await page.getByRole('link', { name: /^Conversation/ }).click();
+    await expect(page.getByRole('heading', { name: 'Veyra', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Maximize video' })).toBeVisible();
   }
   expect(errors).toEqual([]);
   // The renderer and hooks must share one React singleton, including its URL.

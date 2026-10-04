@@ -11,6 +11,7 @@ import { spawn } from 'node:child_process';
 import { access, constants } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
 import type { Plugin } from 'vite';
+import { encodeVideo } from './video.ts';
 
 const STREAM_PATH = '/veyra-screen.mjpeg';
 const STATUS_PATH = '/veyra-screen.json';
@@ -45,6 +46,7 @@ const CAPTURERS: Capturer[] = [
 ];
 
 const viewers = new Set<ServerResponse>();
+const videoViewers = new Map<ServerResponse, ReturnType<typeof encodeVideo>>();
 let resolvedCapturer: { executable: string; command: string; argv: Capturer['argv'] } | null = null;
 let capturing = false;
 let frameCount = 0;
@@ -142,6 +144,7 @@ function captureFrame(command: string, argv: string[]): Promise<Buffer> {
  * simply misses frames instead of receiving a truncated image.
  */
 function broadcast(frame: Buffer) {
+  for (const viewer of videoViewers.values()) viewer.write(frame);
   const header = Buffer.from(
     `--${BOUNDARY}\r\nContent-Type: image/jpeg\r\n` +
     `Content-Length: ${frame.length}\r\n\r\n`,
@@ -156,6 +159,8 @@ function broadcast(frame: Buffer) {
 }
 
 function closeViewers() {
+  for (const viewer of videoViewers.values()) viewer.end();
+  videoViewers.clear();
   for (const viewer of [...viewers]) {
     viewers.delete(viewer);
     viewer.end();
@@ -169,7 +174,7 @@ async function captureLoop() {
 
   let failures = 0;
   try {
-    while (viewers.size > 0) {
+    while (viewers.size + videoViewers.size > 0) {
       const settings = readSettings();
       const startedAt = Date.now();
 
@@ -234,6 +239,25 @@ function handleStream(request: IncomingMessage, response: ServerResponse) {
   void captureLoop();
 }
 
+async function handleVideo(request: IncomingMessage, response: ServerResponse) {
+  if (!await findExecutable('ffmpeg')) {
+    response.writeHead(503, { 'Content-Type': 'text/plain' });
+    response.end('Live video requires ffmpeg.');
+    return;
+  }
+  if (response.destroyed) return;
+  request.socket.setNoDelay(true);
+  request.socket.setTimeout(0);
+  response.writeHead(200, {
+    'Content-Type': 'video/mp4', 'Cache-Control': 'no-store, private',
+    'X-Content-Type-Options': 'nosniff', Connection: 'close',
+  });
+  const viewer = encodeVideo(response, readSettings().fps);
+  videoViewers.set(response, viewer);
+  response.on('close', () => { videoViewers.delete(response); viewer.end(); });
+  void captureLoop();
+}
+
 async function handleStatus(response: ServerResponse) {
   const capturer = await selectCapturer();
   const settings = readSettings();
@@ -246,7 +270,7 @@ async function handleStatus(response: ServerResponse) {
     tool: capturer?.executable ?? null,
     stream_path: STREAM_PATH,
     settings,
-    viewers: viewers.size,
+    viewers: viewers.size + videoViewers.size,
     frames: frameCount,
     last_frame_at: lastFrameAt ? new Date(lastFrameAt).toISOString() : null,
     error: capturer
@@ -265,6 +289,10 @@ export function veyraScreenStream(): Plugin {
 
         if (path === STATUS_PATH) {
           void handleStatus(response);
+          return;
+        }
+        if (path === '/veyra-screen.mp4') {
+          void handleVideo(request, response);
           return;
         }
         if (path === STREAM_PATH) {
