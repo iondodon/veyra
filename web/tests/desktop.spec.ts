@@ -1,9 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
 
-async function watchDesktop(page: Page) {
+async function watchDesktop(page: Page, width = 640, height = 400) {
   // Deterministic frame, with no capture of the owner's desktop during tests.
   await page.route('**/veyra-screen.mjpeg?*', (route) => route.fulfill({
-    contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400"><rect width="640" height="400" fill="green"/></svg>',
+    contentType: 'image/svg+xml', body: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="green"/></svg>`,
   }));
   await page.route('**/veyra-screen.json', (route) => route.fulfill({ json: {
     schema_version: 1, available: true, tool: 'test', stream_path: '/veyra-screen.mjpeg',
@@ -70,3 +70,24 @@ test('maximize is usable while a stream is connecting, not gated on MJPEG load e
   await page.getByRole('button', { name: 'View desktop fullscreen' }).click();
   await expectMaximized(page);
 });
+
+for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }, { width: 844, height: 390 }]) {
+  for (const [width, height] of [[3840, 2160], [1080, 1920], [5120, 1440]]) {
+    test(`inline viewer fits ${width}x${height} at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await watchDesktop(page, width, height);
+      const stage = page.locator('.screen-stage');
+      await stage.scrollIntoViewIfNeeded();
+      const bounds = (await stage.boundingBox())!;
+      const image = (await page.getByAltText('Live local desktop').boundingBox())!;
+      // A definite, viewport-bounded box keeps the percentage-height image from
+      // reverting to its intrinsic size and getting clipped by the panel.
+      expect(bounds.height).toBeLessThanOrEqual(viewport.height / 2 + 1);
+      expect(bounds.y).toBeGreaterThanOrEqual(0);
+      expect(bounds.y + bounds.height).toBeLessThanOrEqual(viewport.height + 1);
+      expect(image).toEqual(bounds);
+      await expect(page.getByAltText('Live local desktop')).toHaveCSS('object-fit', 'contain');
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width);
+    });
+  }
+}
