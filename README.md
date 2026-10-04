@@ -124,6 +124,17 @@ without starting a second copy of the workspace. Runtime status comes from
 the supervisor; an absent or outdated snapshot is shown as disconnected.
 The local state and desktop endpoints run with the development server.
 
+The desktop fullscreen control falls back to an in-page maximized view when
+browser fullscreen is unavailable or denied. Use its exit button or Escape to
+return to the workspace.
+
+Web checks run from `web/`: `npm run lint`, `npx tsc --noEmit`, `npm test`,
+and `npm run build`. For the browser regression suite, install Chromium once
+with `npx playwright install chromium`, then run `npm run test:e2e`. It reuses
+the local server on port 3000 (or starts it if absent); `VEYRA_TEST_URL` can
+select a different running server. Screen responses are mocked during these
+tests so they do not capture the desktop.
+
 Optionally set `NEXT_PUBLIC_TELEGRAM_BOT_USERNAME` in `web/.env.local` to your
 bot's username so **Open Telegram** opens its chat directly. Without it, the
 button opens Telegram's web client. See `web/.env.example` for the settings.

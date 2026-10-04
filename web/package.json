@@ -9,7 +9,9 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "test": "node --experimental-strip-types --test lib/*.test.ts",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "next": "16.2.6",
@@ -20,6 +22,7 @@
     "@cloudflare/vite-plugin": "1.37.1",
     "@cloudflare/workers-types": "4.20260515.1",
     "@openai/sites-vite-plugin": "^0.1.0 || ^0.2.0",
+    "@playwright/test": "^1.58.2",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",

@@ -144,6 +144,8 @@ function Conversation({ context, state, onCopy, onRefresh }: { context: Conversa
   const textarea = useRef<HTMLTextAreaElement>(null);
   const messages = context?.messages ?? [];
   const transcript = JSON.stringify(messages);
+  // Browser-only draft restoration must happen after hydration, not during SSR.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { try { setDraft(sessionStorage.getItem('veyra-message-draft') ?? ''); } catch { /* Storage is optional. */ } setDraftLoaded(true); }, []);
   useEffect(() => { if (draftLoaded) { try { sessionStorage.setItem('veyra-message-draft', draft); } catch { /* Keep draft in memory. */ } } }, [draft, draftLoaded]);
   useEffect(() => { if (feed.current && followLatest.current) feed.current.scrollTop = feed.current.scrollHeight; }, [transcript]);
@@ -174,12 +176,40 @@ function Desktop({ onCopy }: { onCopy: Copy }) {
 
 function LiveDesktop({ onRetry }: { onRetry: () => void }) {
   const image = useRef<HTMLImageElement>(null);
-  const stageElement = useRef<HTMLDivElement>(null);
+  const viewerElement = useRef<HTMLDivElement>(null);
+  const expandButton = useRef<HTMLButtonElement>(null);
+  const [expanded, setExpanded] = useState(false);
   const [stage, setStage] = useState<'connecting' | 'live' | 'stopped'>('connecting');
   const [status, setStatus] = useState<ScreenStatus | null>(null);
   const [error, setError] = useState('');
   const [resolution, setResolution] = useState('');
   const started = useRef(0);
+  const closeExpanded = useCallback(() => {
+    setExpanded(false);
+    if (document.fullscreenElement === viewerElement.current) void document.exitFullscreen().catch(() => {});
+    expandButton.current?.focus();
+  }, []);
+  useEffect(() => {
+    const syncFullscreen = () => setExpanded(document.fullscreenElement === viewerElement.current);
+    document.addEventListener('fullscreenchange', syncFullscreen);
+    return () => document.removeEventListener('fullscreenchange', syncFullscreen);
+  }, []);
+  useEffect(() => {
+    if (!expanded) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') closeExpanded(); };
+    document.addEventListener('keydown', onKey);
+    return () => { document.body.style.overflow = previousOverflow; document.removeEventListener('keydown', onKey); };
+  }, [expanded, closeExpanded]);
+  const toggleExpanded = async () => {
+    if (expanded) { closeExpanded(); return; }
+    // Embedded browsers and mobile browsers may omit or deny the Fullscreen API.
+    // Always provide an in-page maximize mode rather than a silent no-op.
+    setExpanded(true);
+    try { await viewerElement.current?.requestFullscreen?.(); }
+    catch { /* The fixed-position viewer remains usable without native fullscreen. */ }
+  };
   useEffect(() => { const element = image.current; if (!element) return; started.current = Date.now(); element.src = `/veyra-screen.mjpeg?t=${started.current}`; return () => { element.src = IDLE_PIXEL; }; }, []);
   useEffect(() => {
     if (stage === 'stopped') { if (image.current) image.current.src = IDLE_PIXEL; return; }
@@ -201,13 +231,14 @@ function LiveDesktop({ onRetry }: { onRetry: () => void }) {
     void poll();
     return () => { request.abort(); clearTimeout(timer); };
   }, [stage]);
-  return <><div className="stream-toolbar"><span className={`stream-status ${stage}`}><span className="status-dot" />{stage === 'live' ? 'Live view' : stage === 'connecting' ? 'Connecting' : 'Stream stopped'}</span><button className="icon-button" aria-label="View desktop fullscreen" title="Fullscreen" disabled={stage !== 'live'} onClick={() => void stageElement.current?.requestFullscreen?.().catch(() => setError('Fullscreen is unavailable in this browser.'))}><Icon name="expand" /></button></div>
-    <div className="screen-stage" ref={stageElement}>
+  return <><div className={`desktop-viewer${expanded ? ' expanded' : ''}`} ref={viewerElement} role="region" aria-label="Desktop viewer">
+    <div className="stream-toolbar"><span className={`stream-status ${stage}`}><span className="status-dot" />{stage === 'live' ? 'Live view' : stage === 'connecting' ? 'Connecting' : 'Stream stopped'}</span><button ref={expandButton} className="icon-button" aria-label={expanded ? 'Exit desktop fullscreen' : 'View desktop fullscreen'} title={expanded ? 'Exit fullscreen (Esc)' : 'Fullscreen'} aria-pressed={expanded} onClick={() => void toggleExpanded()}><Icon name={expanded ? 'close' : 'expand'} /></button></div>
+    <div className="screen-stage">
       {/* A multipart MJPEG stream requires a native image element. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img ref={image} alt="Live local desktop" onLoad={() => { if (image.current && image.current.naturalWidth > 1) { setResolution(`${image.current.naturalWidth} × ${image.current.naturalHeight}`); setStage((current) => current === 'stopped' ? current : 'live'); } }} onError={() => { setError('The desktop stream closed. Reconnect to try again.'); setStage('stopped'); }} />
       {stage !== 'live' && <div className="screen-overlay"><Icon name="screen" width="36" height="36" /><h3>{stage === 'connecting' ? 'Connecting to the desktop…' : 'Live view stopped'}</h3><p>{stage === 'connecting' ? 'Waiting for the first frame.' : error}</p>{stage === 'stopped' && <button className="button primary-button" onClick={onRetry}><Icon name="refresh" width="16" height="16" />Reconnect</button>}</div>}
-    </div><div className="stream-meta"><span>{resolution || 'Waiting for resolution'}</span><span>{status ? `${status.settings.fps} fps · ${Math.round(status.settings.scale * 100)}% scale` : 'Reading capture settings'}</span><span>{status?.tool ?? 'Local capture'}</span></div>{stage === 'live' && error && <p className="inline-notice" role="status">{error}</p>}</>;
+    </div></div><div className="stream-meta"><span>{resolution || 'Waiting for resolution'}</span><span>{status ? `${status.settings.fps} fps · ${Math.round(status.settings.scale * 100)}% scale` : 'Reading capture settings'}</span><span>{status?.tool ?? 'Local capture'}</span></div>{stage === 'live' && error && <p className="inline-notice" role="status">{error}</p>}</>;
 }
 
 function Evolution({ runtime, state, connected, onCopy }: { runtime: RuntimeStatus | null; state: DataState; connected: boolean; onCopy: Copy }) {
