@@ -123,6 +123,9 @@ when the web app is present. For UI development, run `npm run dev` from `web/`
 without starting a second copy of the workspace. Runtime status comes from
 the supervisor; an absent or outdated snapshot is shown as disconnected.
 The local state and desktop endpoints run with the development server.
+The dashboard sends `Cache-Control: no-store` for development modules and uses
+a dedicated dependency cache so browsers do not mix cached React renderers
+with a rebuilt module graph after updates.
 
 The desktop fullscreen control falls back to an in-page maximized view when
 browser fullscreen is unavailable or denied. Use its exit button or Escape to

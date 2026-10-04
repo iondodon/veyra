@@ -47,9 +47,16 @@ export default defineConfig(async () => {
   const { cloudflare } = await import('@cloudflare/vite-plugin');
 
   return {
+    // Move off the old immutable dependency URLs as well: existing browsers
+    // may still have those cached and never request their new cache headers.
+    cacheDir: 'node_modules/.vite-veyra',
     css: { postcss: { plugins: [tailwindcss()] } },
     server: {
       host: '0.0.0.0',
+      // This dev server is also the long-lived local dashboard. Vite normally
+      // serves optimized dependencies as immutable for a year; retaining an
+      // old renderer across graph rebuilds can load two React singletons.
+      headers: { 'Cache-Control': 'no-store' },
       ...(isCodexSeatbeltSandbox
         ? { watch: { useFsEvents: false, usePolling: true } }
         : {}),
