@@ -63,7 +63,7 @@ function readNumber(raw: string | undefined, fallback: number) {
 /** Frame rate, JPEG quality, and output scale, overridable per instance. */
 function readSettings(): CaptureSettings {
   return {
-    fps: clamp(readNumber(process.env.VEYRA_SCREEN_FPS, 4), 1, 15),
+    fps: clamp(readNumber(process.env.VEYRA_SCREEN_FPS, 12), 1, 15),
     quality: clamp(readNumber(process.env.VEYRA_SCREEN_QUALITY, 70), 10, 95),
     scale: clamp(readNumber(process.env.VEYRA_SCREEN_SCALE, 0.75), 0.1, 1),
   };

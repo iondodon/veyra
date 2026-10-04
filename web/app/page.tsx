@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { jpegFrames } from '../lib/mjpeg';
 import { Icon, Mark, type IconName } from './icons';
 import { isConversationContext, isRuntimeStatus, isScreenStatus, isRuntimeStale, type ConversationContext, type RuntimeStatus, type ScreenStatus } from '../lib/veyra';
 
@@ -184,6 +185,7 @@ function LiveDesktop({ onRetry }: { onRetry: () => void }) {
   const [error, setError] = useState('');
   const [resolution, setResolution] = useState('');
   const started = useRef(0);
+  const lastDisplayed = useRef(0);
   const closeExpanded = useCallback(() => {
     setExpanded(false);
     if (document.fullscreenElement === viewerElement.current) void document.exitFullscreen().catch(() => {});
@@ -210,7 +212,47 @@ function LiveDesktop({ onRetry }: { onRetry: () => void }) {
     try { await viewerElement.current?.requestFullscreen?.(); }
     catch { /* The fixed-position viewer remains usable without native fullscreen. */ }
   };
-  useEffect(() => { const element = image.current; if (!element) return; started.current = Date.now(); element.src = `/veyra-screen.mjpeg?t=${started.current}`; return () => { element.src = IDLE_PIXEL; }; }, []);
+  const stopped = stage === 'stopped';
+  useEffect(() => {
+    const element = image.current;
+    if (!element || stopped) return;
+    const request = new AbortController();
+    let displayedUrl = '';
+    started.current = Date.now();
+    const watch = async () => {
+      try {
+        const response = await fetch(`/veyra-screen.mjpeg?t=${started.current}`, { cache: 'no-store', signal: request.signal });
+        if (!response.ok || !response.body) throw new Error('The desktop stream could not be reached.');
+        for await (const frame of jpegFrames(response.body)) {
+          if (request.signal.aborted) break;
+          const url = URL.createObjectURL(new Blob([frame as Uint8Array<ArrayBuffer>], { type: 'image/jpeg' }));
+          try {
+            // Decode before swapping: no blank flashes, and only fully received
+            // frames count as live. Maximizing never restarts this connection.
+            const decoded = new Image();
+            decoded.src = url;
+            await decoded.decode();
+            if (request.signal.aborted) break;
+            element.src = url;
+            if (displayedUrl) URL.revokeObjectURL(displayedUrl);
+            displayedUrl = url;
+            lastDisplayed.current = Date.now();
+            setResolution(`${decoded.naturalWidth} × ${decoded.naturalHeight}`);
+            setStage('live');
+          } finally {
+            if (displayedUrl !== url) URL.revokeObjectURL(url);
+          }
+        }
+      } catch (error) {
+        if (!request.signal.aborted) {
+          setError(error instanceof Error ? error.message : 'The desktop stream closed.');
+          setStage('stopped');
+        }
+      }
+    };
+    void watch();
+    return () => { request.abort(); element.src = IDLE_PIXEL; if (displayedUrl) URL.revokeObjectURL(displayedUrl); };
+  }, [stopped]);
   useEffect(() => {
     if (stage === 'stopped') { if (image.current) image.current.src = IDLE_PIXEL; return; }
     const request = new AbortController();
@@ -223,7 +265,7 @@ function LiveDesktop({ onRetry }: { onRetry: () => void }) {
         if (!isScreenStatus(value)) throw new Error('Unsupported screen status');
         if (request.signal.aborted) return;
         setStatus(value);
-        const lastFrame = value.last_frame_at ? Date.parse(value.last_frame_at) : 0;
+        const lastFrame = lastDisplayed.current;
         if (!value.available || (Date.now() - started.current > 12_000 && Date.now() - lastFrame > 12_000)) { setError(value.error || 'No recent desktop frames were received.'); setStage('stopped'); return; }
       } catch { if (request.signal.aborted) return; setError('The screen stream could not be reached.'); setStage('stopped'); return; }
       if (!request.signal.aborted) timer = setTimeout(poll, 3000);
@@ -234,9 +276,9 @@ function LiveDesktop({ onRetry }: { onRetry: () => void }) {
   return <><div className={`desktop-viewer${expanded ? ' expanded' : ''}`} ref={viewerElement} role="region" aria-label="Desktop viewer">
     <div className="stream-toolbar"><span className={`stream-status ${stage}`}><span className="status-dot" />{stage === 'live' ? 'Live view' : stage === 'connecting' ? 'Connecting' : 'Stream stopped'}</span><button ref={expandButton} className="icon-button" aria-label={expanded ? 'Exit desktop fullscreen' : 'View desktop fullscreen'} title={expanded ? 'Exit fullscreen (Esc)' : 'Fullscreen'} aria-pressed={expanded} onClick={() => void toggleExpanded()}><Icon name={expanded ? 'close' : 'expand'} /></button></div>
     <div className="screen-stage">
-      {/* A multipart MJPEG stream requires a native image element. */}
+      {/* Each explicitly decoded stream frame is displayed without remounting. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img ref={image} alt="Live local desktop" onLoad={() => { if (image.current && image.current.naturalWidth > 1) { setResolution(`${image.current.naturalWidth} × ${image.current.naturalHeight}`); setStage((current) => current === 'stopped' ? current : 'live'); } }} onError={() => { setError('The desktop stream closed. Reconnect to try again.'); setStage('stopped'); }} />
+      <img ref={image} alt="Live local desktop" />
       {stage !== 'live' && <div className="screen-overlay"><Icon name="screen" width="36" height="36" /><h3>{stage === 'connecting' ? 'Connecting to the desktop…' : 'Live view stopped'}</h3><p>{stage === 'connecting' ? 'Waiting for the first frame.' : error}</p>{stage === 'stopped' && <button className="button primary-button" onClick={onRetry}><Icon name="refresh" width="16" height="16" />Reconnect</button>}</div>}
     </div></div><div className="stream-meta"><span>{resolution || 'Waiting for resolution'}</span><span>{status ? `${status.settings.fps} fps · ${Math.round(status.settings.scale * 100)}% scale` : 'Reading capture settings'}</span><span>{status?.tool ?? 'Local capture'}</span></div>{stage === 'live' && error && <p className="inline-notice" role="status">{error}</p>}</>;
 }

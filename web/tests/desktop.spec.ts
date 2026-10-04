@@ -1,9 +1,42 @@
 import { expect, test, type Page } from '@playwright/test';
+import sharp from 'sharp';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+
+let frameServer: Server;
+let frameOrigin: string;
+let activeStreams = 0;
+test.beforeAll(async () => {
+  // An actual ongoing multipart response, not a single static image. Never
+  // capture the owner's desktop in browser tests.
+  frameServer = createServer(async (request, response) => {
+    const url = new URL(request.url!, 'http://localhost');
+    const width = url.searchParams.get('width') || '640';
+    const height = url.searchParams.get('height') || '400';
+    const frames = await Promise.all(['green', 'blue'].map((background) => sharp({ create: { width: Number(width), height: Number(height), channels: 3, background } }).jpeg().toBuffer()));
+    if (response.destroyed) return;
+    response.writeHead(200, { 'Content-Type': 'multipart/x-mixed-replace; boundary=veyraframe', 'Access-Control-Allow-Origin': '*' });
+    activeStreams++;
+    let count = 0;
+    const timer = setInterval(() => {
+      const frame = frames[count++ % 2];
+      response.write(`--veyraframe\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\n\r\n`);
+      response.write(frame); response.write('\r\n');
+      if (url.searchParams.has('closeAfter') && count >= Number(url.searchParams.get('closeAfter'))) response.end();
+    }, 125);
+    response.on('close', () => { clearInterval(timer); activeStreams--; });
+  });
+  await new Promise<void>((resolve) => frameServer.listen(0, '127.0.0.1', resolve));
+  frameOrigin = `http://127.0.0.1:${(frameServer.address() as AddressInfo).port}`;
+});
+test.afterAll(async () => {
+  frameServer.closeAllConnections();
+  await new Promise<void>((resolve) => frameServer.close(() => resolve()));
+});
 
 async function watchDesktop(page: Page, width = 640, height = 400) {
-  // Deterministic frame, with no capture of the owner's desktop during tests.
   await page.route('**/veyra-screen.mjpeg?*', (route) => route.fulfill({
-    contentType: 'image/svg+xml', body: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="green"/></svg>`,
+    status: 307, headers: { Location: `${frameOrigin}/?width=${width}&height=${height}` },
   }));
   await page.route('**/veyra-screen.json', (route) => route.fulfill({ json: {
     schema_version: 1, available: true, tool: 'test', stream_path: '/veyra-screen.mjpeg',
@@ -91,3 +124,62 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 
     });
   }
 }
+
+for (const mode of ['native', 'fallback'] as const) {
+  test(`frames keep changing before, during and after ${mode} maximize`, async ({ page }) => {
+    if (mode === 'fallback') await page.addInitScript(() => {
+      Object.defineProperty(Element.prototype, 'requestFullscreen', { configurable: true, value: undefined });
+    });
+    let connections = 0;
+    page.on('request', (request) => { if (request.url().includes('/veyra-screen.mjpeg')) connections++; });
+    await watchDesktop(page);
+    const frame = page.getByAltText('Live local desktop');
+    const expectMotion = async () => {
+      // Verify displayed pixels actually change, not merely server frame counts.
+      const pixel = () => frame.evaluate((img: HTMLImageElement) => {
+        const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1;
+        const context = canvas.getContext('2d')!;
+        context.drawImage(img, 0, 0, 1, 1);
+        return Array.from(context.getImageData(0, 0, 1, 1).data).join(',');
+      });
+      const before = await pixel();
+      await expect.poll(pixel, { intervals: [50] }).not.toBe(before);
+      await expect(page.locator('.stream-status')).toHaveText('Live view');
+    };
+    await expectMotion();
+    await page.getByRole('button', { name: 'View desktop fullscreen' }).click();
+    await expectMaximized(page);
+    await expectMotion();
+    await page.getByRole('button', { name: 'Exit desktop fullscreen' }).click();
+    await expectMotion();
+    expect(connections).toBe(1);
+  });
+}
+
+test('leaving an expanded viewer cancels capture', async ({ page }) => {
+  await expect.poll(() => activeStreams).toBe(0);
+  await watchDesktop(page);
+  await page.getByRole('button', { name: 'View desktop fullscreen' }).click();
+  await expect.poll(() => activeStreams).toBe(1);
+  await page.evaluate(() => { window.location.hash = 'conversation'; });
+  await expect(page.getByRole('region', { name: 'Desktop viewer' })).toHaveCount(0);
+  await expect.poll(() => activeStreams).toBe(0);
+});
+
+test('a closed frame stream is reported even when global status says live; reconnect resumes motion', async ({ page }) => {
+  await watchDesktop(page);
+  // End the next connection after a few real frames, while status remains healthy.
+  await page.route('**/veyra-screen.mjpeg?*', (route) => route.fulfill({
+    status: 307, headers: { Location: `${frameOrigin}/?closeAfter=3` },
+  }));
+  await page.getByRole('button', { name: 'Stop watching' }).click();
+  await page.getByRole('button', { name: 'Start watching' }).click();
+  await expect(page.locator('.stream-status')).toHaveText('Stream stopped');
+  await expect(page.getByText('The desktop stream closed. Reconnect to try again.')).toBeVisible();
+  await page.unroute('**/veyra-screen.mjpeg?*');
+  await page.route('**/veyra-screen.mjpeg?*', (route) => route.fulfill({
+    status: 307, headers: { Location: frameOrigin },
+  }));
+  await page.getByRole('button', { name: 'Reconnect', exact: true }).click();
+  await expect(page.locator('.stream-status')).toHaveText('Live view');
+});
