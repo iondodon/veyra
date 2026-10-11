@@ -49,7 +49,7 @@ class WebChat:
         with closing(sqlite3.connect(self.database)) as connection:
             self.session_after = connection.execute("SELECT COALESCE(MAX(id), 0) FROM events").fetchone()[0]
         self.session_id = secrets.token_hex(12)
-        self.configuration = {"provider": "chatgpt", "model": None, "connected": False, "sign_in_url": None}
+        self.configuration = {"provider": None, "model": None, "connected": False, "sign_in_url": None}
 
     def publish(self, text, *, role="system", kind="message", **fields):
         payload = {"role": role, "kind": kind, "text": self.credentials.redact(str(text)), **fields}

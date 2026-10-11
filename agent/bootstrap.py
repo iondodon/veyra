@@ -51,12 +51,14 @@ def load_instructions() -> str:
 
 
 INTRO = (
-    "I'm Veyra. You can use me with your ChatGPT subscription, your Claude subscription, or an API. "
-    "Your ChatGPT subscription is the default; no API key is needed.\n\n"
-    "If you prefer API billing, save the key for the service you choose:\n"
-    "• OpenAI: OPENAI_API_KEY\n• Anthropic: ANTHROPIC_API_KEY\n\n"
-    "Use the private API key form in this chat. Saved keys stay on this computer between reboots. "
-    "I'll choose the model and tell you which one is in use. I'll ask before running commands."
+    "I'm Veyra. Choose how you'd like to connect:\n\n"
+    "• Sign in with your ChatGPT subscription.\n"
+    "• Sign in with your Claude subscription.\n"
+    "• Use an API: save OPENAI_API_KEY for OpenAI or ANTHROPIC_API_KEY for Anthropic "
+    "in the private API key form, then choose that API.\n\n"
+    "I'll choose the model for your selected service and tell you its name. "
+    "Your sign-ins, API keys, and service choice are saved for future starts. "
+    "I'll ask before running commands."
 )
 
 
@@ -80,8 +82,10 @@ def setup_intent(text):
     value = re.sub(r"[.!?]+$", "", text.strip().lower()).strip()
     value = re.sub(r"\s+", " ", value)
     value = re.sub(r"^(?:please |i want to |i would like to |can you |could you )", "", value)
-    if value in ("sign in", "sign in with chatgpt", "continue with chatgpt", "connect chatgpt",
-                 "connect my chatgpt account", "sign me in"):
+    if value in ("sign in", "sign me in"):
+        return "subscriptions", None
+    if value in ("sign in with chatgpt", "continue with chatgpt", "connect chatgpt",
+                 "connect my chatgpt account"):
         return "connect", None
     if value in ("sign in with claude", "sign in with anthropic", "continue with claude", "connect claude",
                  "connect my claude account", "connect my anthropic account"):
@@ -96,7 +100,9 @@ def setup_intent(text):
     match = re.fullmatch(r"(?:use|switch to|connect to) (?:my |the |an? )?(.+?)(?: please)?", value)
     if match:
         choice = match[1]
-        if choice in ("subscription", "chatgpt", "chatgpt subscription", "chatgpt plan", "subscription mode"):
+        if choice in ("subscription", "subscription mode"):
+            return "subscriptions", None
+        if choice in ("chatgpt", "chatgpt subscription", "chatgpt plan"):
             return "provider", "chatgpt"
         if choice in ("claude", "claude subscription", "claude plan", "anthropic subscription", "anthropic plan"):
             return "provider", "claude"
@@ -144,7 +150,11 @@ class Conversation:
 
     def start(self):
         send(INTRO, kind="setup")
-        self.selected = load_selected_provider(PROVIDER_FILE) or "chatgpt"
+        self.selected = load_selected_provider(PROVIDER_FILE)
+        if self.selected is None:
+            self.configuration()
+            emit("ready")
+            return
         try:
             self.select_provider(self.selected)
         except ProviderConfigError as exc:
@@ -169,7 +179,7 @@ class Conversation:
             raise ProviderConfigError(str(exc)) from None
 
     def configuration(self):
-        emit("configuration", provider=self.selected or "chatgpt",
+        emit("configuration", provider=self.selected,
              model=self.provider.model if self.provider else None,
              connected=self.provider is not None,
              sign_in_url=self.claude_login_url if self.selected == "claude" else
@@ -177,6 +187,8 @@ class Conversation:
 
     def provider_status(self):
         if self.provider is None:
+            if self.selected is None:
+                return "Choose Continue with ChatGPT, Continue with Claude, or the private API key form below to get started."
             if self.selected == "claude":
                 return "Choose Continue with Claude to sign in with your Claude subscription, or select another service in Settings."
             return ("Sign in with your ChatGPT or Claude subscription to get started, or add an API key with the private form. "
@@ -309,6 +321,9 @@ class Conversation:
         if approval in ("approve", "approve these commands", "deny", "deny these commands"):
             text = "/approve" if approval.startswith("approve") else "/deny"
         action, choice = setup_intent(text)
+        if action == "subscriptions":
+            send("Choose Continue with ChatGPT or Continue with Claude below to sign in with your subscription.", kind="setup")
+            return
         if action == "connect":
             if choice == "claude":
                 self.connect_claude_subscription()

@@ -54,11 +54,17 @@ approvals are cancelled on restart.
 
 ## Connect a model
 
+There is no default service. The first chat message offers **Continue with
+ChatGPT**, **Continue with Claude**, and the **Private API key form**. Choose
+a subscription sign-in or save the API key for the service you want, then
+select that API. Veyra waits for your choice before starting authentication
+or using a model. An explicit service choice is remembered across restarts.
+
 ### Use your ChatGPT plan
 
-ChatGPT subscription usage is the default for a new installation. Veyra
-automatically prepares a **Continue with ChatGPT** link in the chat when
-sign-in is needed. Open it on the computer running Veyra, authorize Veyra,
+Choose **Continue with ChatGPT** in the first message or **Settings → Use
+ChatGPT subscription**. Veyra prepares a sign-in link if needed. Open it on
+the computer running Veyra, authorize Veyra,
 and return to the chat. Sign-in can wait in the background while you choose
 another usage mode. Later starts reuse the saved account.
 
@@ -81,7 +87,7 @@ Use natural language to manage setup, or choose a service under **Settings**:
 | “Add my API key” | Open the private key form from the chat |
 
 Veyra chooses the model automatically and shows its name in the chat and
-above the composer. Subscription usage uses the first visible model in the
+above the composer. ChatGPT usage uses the first visible model in the
 account's catalog. API defaults are `gpt-5.6` for OpenAI and `claude-opus-5`
 for Anthropic. Advanced installations can override these presets with
 `CHATGPT_MODEL`, `OPENAI_MODEL`, or `ANTHROPIC_MODEL` before startup.

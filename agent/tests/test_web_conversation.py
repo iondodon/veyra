@@ -99,7 +99,41 @@ class ConversationTests(unittest.TestCase):
         save.assert_not_called()
         self.assertIs(self.chat.provider, original)
 
-    def test_first_start_defaults_to_subscription_and_does_not_block_on_signin(self):
+    def test_first_start_waits_for_choice_without_authentication_or_model_calls(self):
+        self.chat.provider = None
+        self.chat.credentials.save("openai", "sk-fixture-available-but-unselected")
+        with patch.object(bootstrap, "create_provider") as create, \
+             patch.object(bootstrap, "ChatGPTAuth") as chatgpt, \
+             patch.object(bootstrap, "ClaudeSubscriptionAuth") as claude, \
+             patch.object(bootstrap, "save_selected_provider") as save:
+            self.chat.start()
+            self.chat.handle("Hello")
+        create.assert_not_called()
+        chatgpt.assert_not_called()
+        claude.assert_not_called()
+        save.assert_not_called()
+        self.assertIsNone(self.chat.selected)
+        self.assertIsNone(self.chat.provider)
+        self.assertTrue(any(event["type"] == "ready" for event in self.events))
+        configuration = next(e for e in self.events if e["type"] == "configuration")
+        self.assertIsNone(configuration["provider"])
+        self.assertIsNone(configuration["model"])
+        self.assertFalse(configuration["connected"])
+
+    def test_unspecified_subscription_request_offers_both_services(self):
+        self.chat.provider = None
+        with patch.object(self.chat, "connect_subscription") as chatgpt, \
+             patch.object(self.chat, "connect_claude_subscription") as claude:
+            for phrase in ("Sign in", "Sign me in", "Use my subscription", "Use subscription mode"):
+                self.chat.handle(phrase)
+        chatgpt.assert_not_called()
+        claude.assert_not_called()
+        self.assertIsNone(self.chat.selected)
+        replies = [e for e in self.events if e.get("kind") == "setup"]
+        self.assertEqual(len(replies), 4)
+        self.assertTrue(all("ChatGPT" in e["text"] and "Claude" in e["text"] for e in replies))
+
+    def test_explicit_chatgpt_choice_starts_background_signin(self):
         self.chat.provider = None
         finish = threading.Event()
         link_ready = threading.Event()
@@ -108,12 +142,15 @@ class ConversationTests(unittest.TestCase):
             kwargs["notify"]("Continue with ChatGPT\nhttps://auth.openai.com/fixture")
             link_ready.set()
             finish.wait(timeout=3)
-        with patch.object(bootstrap, "create_provider", side_effect=[bootstrap.ProviderConfigError("Sign in"), connected]) as create, \
+        with patch.object(bootstrap, "create_provider", return_value=connected) as create, \
              patch.object(bootstrap, "provider_available", return_value=False), \
              patch.object(bootstrap, "ChatGPTAuth") as auth:
             auth.return_value.login.side_effect = login
             try:
                 self.chat.start()
+                self.assertIsNone(self.chat.selected)
+                self.assertFalse(link_ready.is_set())
+                self.chat.handle("Use my ChatGPT subscription.")
                 self.assertTrue(link_ready.wait(timeout=2))
                 self.assertEqual(self.chat.selected, "chatgpt")
                 self.assertTrue(any(event["type"] == "ready" for event in self.events))
@@ -124,7 +161,7 @@ class ConversationTests(unittest.TestCase):
                 finish.set()
                 if thread:
                     thread.join(timeout=2)
-            self.assertEqual([call.args[0] for call in create.call_args_list], ["chatgpt", "chatgpt"])
+            self.assertEqual([call.args[0] for call in create.call_args_list], ["chatgpt"])
         self.assertIs(self.chat.provider, connected)
         self.assertTrue(any("preset-plan-model" in event.get("text", "") for event in self.events))
 

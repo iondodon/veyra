@@ -23,7 +23,7 @@
       <button type="button" data-password-settings>Change password</button>
     </aside>
     <div class="shortcuts" aria-label="Chat shortcuts">
-      <span id="model-status">ChatGPT subscription · preparing…</span>
+      <span id="model-status">Choose a service to begin</span>
       <details><summary>Settings</summary><div class="menu">
         <button type="button" data-message="Use my ChatGPT subscription.">Use ChatGPT subscription</button>
         <button type="button" data-message="Use my Claude subscription.">Use Claude subscription</button>
@@ -66,7 +66,8 @@
       <p id="api-local-instructions" hidden>To save keys securely, open <a href="http://localhost:3000" target="_blank" rel="noopener noreferrer">localhost:3000</a> on the computer running Veyra. Keys can then be used from any device.</p>
       <div id="api-key-fields" hidden>
         <label for="api-provider">Service</label>
-        <select id="api-provider">
+        <select id="api-provider" required>
+          <option value="" disabled selected>Choose a service</option>
           <option value="openai">OpenAI — OPENAI_API_KEY</option>
           <option value="anthropic">Anthropic — ANTHROPIC_API_KEY</option>
         </select>

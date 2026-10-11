@@ -87,6 +87,15 @@ for line in sys.stdin:
         self.assertEqual([e["text"] for e in events], ["hello", "Reply: hello"])
         self.assertEqual(events[0]["role"], "user")
 
+    def test_initial_configuration_has_no_service_or_model(self):
+        status, data = self.request("GET", "/api/events")
+        self.assertEqual(status, 200)
+        configuration = json.loads(data)["status"]["configuration"]
+        self.assertIsNone(configuration["provider"])
+        self.assertIsNone(configuration["model"])
+        self.assertIsNone(configuration["sign_in_url"])
+        self.assertFalse(configuration["connected"])
+
     def test_foreign_origin_and_rebinding_host_cannot_submit(self):
         self.attach_agent()
         self.assertEqual(self.request("POST", "/api/messages", {"text": "/approve"},

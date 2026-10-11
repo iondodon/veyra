@@ -82,8 +82,11 @@ class ProviderWiringTests(unittest.TestCase):
             bootstrap.STATE / "memory" / "provider.json",
         )
 
-    def test_intro_explains_subscription_default_and_optional_api_keys(self):
-        self.assertIn("subscription is the default", bootstrap.INTRO)
+    def test_intro_offers_both_subscriptions_and_optional_api_keys(self):
+        self.assertIn("Choose how", bootstrap.INTRO)
+        self.assertIn("ChatGPT subscription", bootstrap.INTRO)
+        self.assertIn("Claude subscription", bootstrap.INTRO)
+        self.assertNotIn("default", bootstrap.INTRO)
         self.assertIn("OPENAI_API_KEY", bootstrap.INTRO)
         self.assertIn("ANTHROPIC_API_KEY", bootstrap.INTRO)
         self.assertNotIn("/provider", bootstrap.INTRO)

@@ -13,7 +13,7 @@ depends on which provider is active.
 The ChatGPT provider uses OAuth plan usage, streams stateless Responses
 requests, and adapts namespaced function calls to the same approval loop.
 
-New installations default to ChatGPT subscription usage. Later choices are
+New installations wait for an explicit service choice. Later choices are
 persisted; API billing is never inferred from which keys happen to be set.
 """
 

@@ -42,8 +42,9 @@ function refreshControls() {
   document.querySelector("#password-reminder").hidden = !state.password_is_default;
   document.body.classList.toggle("password-required", Boolean(state.password_is_default));
   const configuration = state.configuration || {};
-  const label = {chatgpt: "ChatGPT subscription", claude: "Claude subscription", openai: "OpenAI API", anthropic: "Anthropic API"}[configuration.provider] || "ChatGPT subscription";
-  document.querySelector("#model-status").textContent = label + (configuration.model ? " · " + configuration.model : " · awaiting setup");
+  const label = {chatgpt: "ChatGPT subscription", claude: "Claude subscription", openai: "OpenAI API", anthropic: "Anthropic API"}[configuration.provider];
+  document.querySelector("#model-status").textContent = label ?
+    label + (configuration.model ? " · " + configuration.model : " · awaiting setup") : "Choose a service to begin";
   const needsSignIn = ["chatgpt", "claude"].includes(configuration.provider) && !configuration.connected;
   const signInLabel = configuration.provider === "claude" ? "Continue with Claude" : "Continue with ChatGPT";
   document.querySelectorAll("[data-signin-link]").forEach(link => {
@@ -52,10 +53,12 @@ function refreshControls() {
     if (configuration.sign_in_url) link.href = configuration.sign_in_url;
     else link.removeAttribute("href");
   });
-  document.querySelectorAll("[data-signin-button]").forEach(button => {
-    button.hidden = !needsSignIn || Boolean(configuration.sign_in_url);
-    button.textContent = signInLabel;
-    button.dataset.message = configuration.provider === "claude" ? "Sign in with Claude." : "Sign in with ChatGPT.";
+  document.querySelectorAll("[data-subscription-choice]").forEach(button => {
+    const provider = button.dataset.subscriptionChoice;
+    const name = provider === "claude" ? "Claude" : "ChatGPT";
+    const pending = provider === configuration.provider && needsSignIn;
+    button.hidden = pending && Boolean(configuration.sign_in_url);
+    button.dataset.message = pending ? "Sign in with " + name + "." : "Use my " + name + " subscription.";
   });
   document.querySelectorAll("[data-signin-help]").forEach(note => { note.hidden = !needsSignIn; });
 }
@@ -113,14 +116,16 @@ function appendMessage(event) {
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       link.hidden = true;
-      const signIn = document.createElement("button");
-      signIn.type = "button";
-      signIn.dataset.signinButton = "";
-      signIn.dataset.message = "Sign in with ChatGPT.";
-      signIn.textContent = "Continue with ChatGPT";
-      signIn.hidden = true;
-      signIn.addEventListener("click", () => submit(signIn.dataset.message));
-      actions.append(link, signIn);
+      actions.append(link);
+      for (const [provider, name] of [["chatgpt", "ChatGPT"], ["claude", "Claude"]]) {
+        const signIn = document.createElement("button");
+        signIn.type = "button";
+        signIn.dataset.subscriptionChoice = provider;
+        signIn.dataset.message = "Use my " + name + " subscription.";
+        signIn.textContent = "Continue with " + name;
+        signIn.addEventListener("click", () => submit(signIn.dataset.message));
+        actions.append(signIn);
+      }
     }
     const keys = document.createElement("button");
     keys.type = "button";
