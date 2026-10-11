@@ -1,4 +1,4 @@
-"""Model providers for the initial agent: OpenAI and Anthropic.
+"""Model providers: ChatGPT plan, OpenAI API, and Anthropic API.
 
 bootstrap.py speaks one request shape, modeled on the OpenAI Responses API:
 
@@ -10,6 +10,8 @@ returning an object with ``.id``, ``.output`` (items whose ``type`` is
 straight through. The Anthropic provider translates it to the Claude
 Messages API and normalizes the reply back, so the rest of the agent never
 depends on which provider is active.
+The ChatGPT provider uses OAuth plan usage, streams stateless Responses
+requests, and adapts namespaced function calls to the same approval loop.
 
 The provider itself is an explicit owner decision persisted with the other
 local state; it is never inferred from which API keys happen to be set.
@@ -23,7 +25,8 @@ from pathlib import Path
 
 PROVIDER_OPENAI = "openai"
 PROVIDER_ANTHROPIC = "anthropic"
-PROVIDER_NAMES = (PROVIDER_OPENAI, PROVIDER_ANTHROPIC)
+PROVIDER_CHATGPT = "chatgpt"
+PROVIDER_NAMES = (PROVIDER_CHATGPT, PROVIDER_OPENAI, PROVIDER_ANTHROPIC)
 
 DEFAULT_OPENAI_MODEL = "gpt-5.6"
 DEFAULT_ANTHROPIC_MODEL = "claude-opus-5"
@@ -49,8 +52,19 @@ def parse_provider_choice(text) -> str | None:
     return choice if choice in PROVIDER_NAMES else None
 
 
-def api_key_env_var(name: str) -> str:
-    return "OPENAI_API_KEY" if name == PROVIDER_OPENAI else "ANTHROPIC_API_KEY"
+def api_key_env_var(name: str) -> str | None:
+    return {PROVIDER_OPENAI: "OPENAI_API_KEY", PROVIDER_ANTHROPIC: "ANTHROPIC_API_KEY"}.get(name)
+
+
+def provider_available(name: str, env=os.environ) -> bool:
+    if name == PROVIDER_CHATGPT:
+        from chatgpt_auth import ChatGPTAuth, ChatGPTError
+        try:
+            ChatGPTAuth(env.get("VEYRA_CHATGPT_AUTH_FILE")).account()
+            return True
+        except (ChatGPTError, OSError):
+            return False
+    return bool(env.get(api_key_env_var(name)))
 
 
 def load_selected_provider(path) -> str | None:
@@ -78,8 +92,18 @@ def create_provider(name: str, env=os.environ):
     choice = parse_provider_choice(name)
     if choice is None:
         raise ProviderConfigError(
-            "Model provider must be 'openai' or 'anthropic'"
+            "Model provider must be 'chatgpt', 'openai', or 'anthropic'"
         )
+    if choice == PROVIDER_CHATGPT:
+        from chatgpt_auth import ChatGPTAuth, ChatGPTError
+        from chatgpt_provider import ChatGPTProvider
+        try:
+            return ChatGPTProvider(
+                model=env.get("CHATGPT_MODEL"),
+                auth=ChatGPTAuth(env.get("VEYRA_CHATGPT_AUTH_FILE")),
+            )
+        except (ChatGPTError, OSError) as exc:
+            raise ProviderConfigError(str(exc)) from None
     api_key = env.get(api_key_env_var(choice), "")
     if not api_key:
         raise ProviderConfigError(f"{api_key_env_var(choice)} is not set")

@@ -24,12 +24,14 @@ if [ ! -x "$PYTHON" ]; then
         echo "[agent] Could not create the Python environment." >&2
         exit 2
     fi
+fi
 
-    "$PYTHON" -m pip install \
-        --disable-pip-version-check \
-        --quiet \
-        -r "$AGENT_DIR/requirements.txt"
-
+# Update an existing environment when a successor changes dependencies.
+REQUIREMENTS_HASH="$("$PYTHON" -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$AGENT_DIR/requirements.txt")"
+INSTALLED_HASH="$(cat "$VENV/.requirements-hash" 2>/dev/null || true)"
+if [ "$REQUIREMENTS_HASH" != "$INSTALLED_HASH" ]; then
+    "$PYTHON" -m pip install --disable-pip-version-check --quiet -r "$AGENT_DIR/requirements.txt"
+    printf '%s\n' "$REQUIREMENTS_HASH" > "$VENV/.requirements-hash"
     echo "[agent] Runtime ready."
 fi
 

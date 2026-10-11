@@ -11,9 +11,10 @@ from pathlib import Path
 import requests
 
 from providers import (
-    PROVIDER_NAMES, ProviderConfigError, api_key_env_var, create_provider,
+    PROVIDER_NAMES, ProviderConfigError, create_provider, provider_available,
     load_selected_provider, parse_provider_choice, save_selected_provider,
 )
+from chatgpt_auth import ChatGPTError
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -73,9 +74,10 @@ You shape what I become by talking to me.
 I can inspect my implementation, work on this computer, test improvements, and commit successor versions of myself. 
 Describe the next version you want me to build.
 
-The model provider is your explicit choice: select or switch it with `/provider openai` or `/provider anthropic`. 
+Choose `/provider chatgpt` to use your ChatGPT plan after signing in with `agent/START --chatgpt-login` in a terminal.
+Choose `/provider openai` or `/provider anthropic` to use an API key and API billing.
 The selection is remembered across restarts, and nothing runs on a provider you did not choose.
-As a stating point only OpenAI and Anthropic providers are supported.
+ChatGPT plan usage and credits can be managed in ChatGPT Settings → Usage.
 
 What should I become?"""
 
@@ -89,6 +91,8 @@ def self_test() -> int:
         WORKSPACE,
         PROMPT,
         Path(__file__).with_name("providers.py"),
+        Path(__file__).with_name("chatgpt_auth.py"),
+        Path(__file__).with_name("chatgpt_provider.py"),
     ]
 
     missing = [str(p) for p in required if not p.exists()]
@@ -118,6 +122,7 @@ def self_test() -> int:
 
     provider_checks = [
         parse_provider_choice("openai") == "openai",
+        parse_provider_choice("chatgpt") == "chatgpt",
         parse_provider_choice(" Anthropic ") == "anthropic",
         parse_provider_choice("gemini") is None,
         parse_provider_choice("") is None,
@@ -236,6 +241,10 @@ def run_local(command: str, timeout: int = 120):
 
 
 def main() -> int:
+    if any(arg.startswith("--chatgpt-") for arg in sys.argv[1:]):
+        from chatgpt_auth import main as auth_main
+        return auth_main(sys.argv[1:])
+
     if "--self-test" in sys.argv:
         return self_test()
 
@@ -270,13 +279,13 @@ def main() -> int:
         except ProviderConfigError as exc:
             provider_notice = (
                 f"The remembered model provider '{remembered}' cannot "
-                f"start: {exc}. Export the key and restart Veyra, or "
+                f"start: {exc}. Configure it and restart Veyra, or "
                 "select another provider with /provider."
             )
     else:
         provider_notice = (
             "No model provider is selected yet. Choose one with "
-            "`/provider openai` or `/provider anthropic`. The choice is "
+            "`/provider chatgpt`, `/provider openai`, or `/provider anthropic`. The choice is "
             "remembered across restarts and can be switched at any time."
         )
 
@@ -288,15 +297,19 @@ def main() -> int:
     def provider_status() -> str:
         available = [
             name for name in PROVIDER_NAMES
-            if os.environ.get(api_key_env_var(name))
+            if provider_available(name)
         ]
 
         return "\n".join([
             "No model provider is selected." if provider is None
             else f"Model provider: {provider.name} (model {provider.model}).",
-            "API keys available for: " + (", ".join(available) or "none") + ".",
-            "Use `/provider openai` or `/provider anthropic` to select or "
+            "Configured providers: " + (", ".join(available) or "none") + ".",
+            "Use `/provider chatgpt`, `/provider openai`, or `/provider anthropic` to select or "
             "switch. The choice is remembered across restarts.",
+            "ChatGPT uses plan allowance/authorized credits; openai and anthropic use API billing.",
+            "Connect ChatGPT in a terminal with agent/START --chatgpt-login.",
+            ("ChatGPT account: " + (provider.account.get("email") or provider.account["subject"])
+             if provider is not None and provider.name == "chatgpt" else ""),
         ])
 
     def ask(text: str, previous_id=None):
@@ -393,7 +406,7 @@ def main() -> int:
                     if choice is None:
                         send(
                             chat_id,
-                            "Use /provider openai or /provider anthropic.",
+                            "Use /provider chatgpt, /provider openai, or /provider anthropic.",
                         )
                         continue
 
@@ -549,6 +562,14 @@ def main() -> int:
 
         except KeyboardInterrupt:
             return 0
+
+        except ChatGPTError as exc:
+            # Limits and sign-in problems must be visible in the conversation.
+            # Never switch the billing path after a failed plan request.
+            try:
+                send(owner_id, str(exc))
+            except Exception:
+                print("Could not send ChatGPT error to Telegram.", file=sys.stderr)
 
         except requests.HTTPError as exc:
             # Report the one-consumer conflict once, in words the owner
