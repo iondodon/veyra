@@ -1,6 +1,7 @@
 import base64
 import http.client
 import json
+import sqlite3
 from pathlib import Path
 import subprocess
 import sys
@@ -83,8 +84,8 @@ for line in sys.stdin:
         status, data = self.request("GET", "/api/events?after=0")
         events = json.loads(data)["events"]
         self.assertEqual(status, 200)
-        self.assertEqual([e["text"] for e in events], ["runtime diagnostic", "hello", "Reply: hello"])
-        self.assertEqual(events[1]["role"], "user")
+        self.assertEqual([e["text"] for e in events], ["hello", "Reply: hello"])
+        self.assertEqual(events[0]["role"], "user")
 
     def test_foreign_origin_and_rebinding_host_cannot_submit(self):
         self.attach_agent()
@@ -104,17 +105,30 @@ for line in sys.stdin:
         self.attach_agent()
         self.assertEqual(self.request("POST", "/api/messages", {"text": "/approve", "approval_id": "old"})[0], 409)
         self.assertIsNone(self.chat.approval_id)
-        self.assertTrue(any("cancelled" in e["text"] for e in self.chat.snapshot(0)["events"]))
+        self.assertFalse(any(e.get("approval_id") == "old" for e in self.chat.snapshot(0)["events"]))
 
-    def test_transcript_survives_restart_and_cursor_avoids_duplicates(self):
+    def test_restart_shows_a_clean_session_and_keeps_previous_messages_saved(self):
         self.chat.publish("First message", role="assistant")
         first = self.chat.snapshot(0)
         restarted = WebChat(self.root)
-        self.assertEqual(restarted.snapshot(0)["events"], first["events"])
+        self.assertEqual(restarted.snapshot(0)["events"], [])
+        self.assertNotEqual(restarted.session_id, self.chat.session_id)
+        connection = sqlite3.connect(restarted.database)
+        self.addCleanup(connection.close)
+        saved = [json.loads(row[0])["text"] for row in connection.execute("SELECT payload FROM events")]
+        self.assertIn("First message", saved)
         restarted.publish("Second message")
         later = restarted.snapshot(first["cursor"])
         self.assertEqual([e["text"] for e in later["events"]], ["Second message"])
         self.assertFalse(later["status"]["ready"])
+        self.assertEqual(restarted.snapshot(later["cursor"])["events"], [])
+
+    def test_routine_logs_are_hidden_and_errors_remain_visible(self):
+        self.chat.publish("starting agent", kind="status")
+        self.chat.publish("Something needs your attention", kind="error")
+        data = self.chat.snapshot(0)
+        self.assertEqual([e["text"] for e in data["events"]], ["Something needs your attention"])
+        self.assertEqual(self.chat.snapshot(data["cursor"])["events"], [])
 
     def test_invalid_messages_and_paths_are_rejected(self):
         for payload in ([], {"text": ""}, {"text": 7}, {"text": "a" * 20001}):
@@ -127,7 +141,7 @@ for line in sys.stdin:
         handler = self.chat.server.RequestHandlerClass
         credential = "Basic " + base64.b64encode(("veyra:" + self.chat.network_password).encode()).decode()
         with patch.object(handler, "local_client", return_value=False):
-            for path in ("/", "/chat.js", "/api/events"):
+            for path in ("/", "/chat.js", "/api/events", "/api/settings"):
                 self.assertEqual(self.request("GET", path)[0], 401)
                 self.assertEqual(self.request("GET", path, headers={"Authorization": "Basic wrong"})[0], 401)
                 self.assertEqual(self.request("GET", path, headers={"Authorization": credential})[0], 200)
@@ -145,6 +159,65 @@ for line in sys.stdin:
         self.assertTrue(restarted.snapshot(0)["status"]["password_is_default"])
         self.assertNotIn(self.chat.network_password, json.dumps(self.chat.snapshot(0)))
         self.assertEqual(self.chat.database.stat().st_mode & 0o777, 0o600)
+
+    def test_private_key_form_saves_keys_durably_without_exposing_them(self):
+        key = "sk-fixture-private-api-key"
+        status, body = self.request("POST", "/api/keys", {"provider": "openai", "key": key})
+        self.assertEqual(status, 200)
+        self.assertNotIn(key, body.decode())
+        restarted = WebChat(self.root)
+        self.assertEqual(restarted.credentials.environment({})["OPENAI_API_KEY"], key)
+        self.assertEqual(restarted.credentials.path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(restarted.credentials.directory.stat().st_mode & 0o777, 0o700)
+        status, body = self.request("GET", "/api/settings")
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["can_save_keys"])
+        self.assertTrue(next(item for item in json.loads(body)["providers"] if item["provider"] == "openai")["configured"])
+        self.assertNotIn(key, body.decode())
+        self.assertNotIn(key, json.dumps(self.chat.snapshot(0)))
+        self.assertNotIn(key.encode(), self.chat.database.read_bytes())
+
+    def test_keys_cannot_be_submitted_over_lan_or_from_another_origin(self):
+        payload = {"provider": "anthropic", "key": "sk-ant-fixture-private-key"}
+        handler = self.chat.server.RequestHandlerClass
+        credential = "Basic " + base64.b64encode(b"veyra:veyra").decode()
+        with patch.object(handler, "local_client", return_value=False):
+            self.assertEqual(self.request("POST", "/api/keys", payload)[0], 401)
+            self.assertEqual(self.request("POST", "/api/keys", payload, {"Authorization": credential})[0], 403)
+            status, body = self.request("GET", "/api/settings", headers={"Authorization": credential})
+            self.assertEqual(status, 200)
+            self.assertFalse(json.loads(body)["can_save_keys"])
+        self.assertEqual(self.request("POST", "/api/keys", payload, {"Origin": "https://attacker.example"})[0], 403)
+        self.assertFalse(self.chat.credentials.path.exists())
+
+    def test_keys_pasted_into_chat_are_rejected_before_storage_or_model_submission(self):
+        self.attach_agent()
+        key = "sk-fixture-should-never-reach-model"
+        status, body = self.request("POST", "/api/messages", {"text": "Here is my key: " + key})
+        self.assertEqual(status, 400)
+        self.assertTrue(json.loads(body)["open_api_keys"])
+        self.assertFalse(self.chat.busy)
+        self.assertNotIn(key.encode(), self.chat.database.read_bytes())
+        self.chat.credentials.save("openai", "private-key-without-known-prefix")
+        self.assertEqual(self.request("POST", "/api/messages", {"text": "private-key-without-known-prefix"})[0], 400)
+        self.chat.publish("An error containing " + key + " and private-key-without-known-prefix", kind="error")
+        text = json.dumps(self.chat.snapshot(0))
+        self.assertNotIn(key, text)
+        self.assertNotIn("private-key-without-known-prefix", text)
+        self.assertIn("API key hidden", text)
+
+    def test_invalid_keys_and_updates_during_pending_work_are_rejected(self):
+        for payload in ([], {}, {"provider": [], "key": "valid-fixture-key"},
+                        {"provider": "unknown", "key": "valid-fixture-key"},
+                        {"provider": "openai", "key": "short"},
+                        {"provider": "openai", "key": "a key with spaces"}):
+            self.assertEqual(self.request("POST", "/api/keys", payload)[0], 400)
+        self.chat.busy = True
+        self.assertEqual(self.request("POST", "/api/keys", {"provider": "openai", "key": "valid-fixture-key"})[0], 409)
+        self.chat.busy = False
+        self.chat.approval_id = "pending"
+        self.assertEqual(self.request("POST", "/api/keys", {"provider": "openai", "key": "valid-fixture-key"})[0], 409)
+        self.assertFalse(self.chat.credentials.path.exists())
 
     def test_password_update_requires_authentication_origin_and_current_password(self):
         handler = self.chat.server.RequestHandlerClass

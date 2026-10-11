@@ -81,7 +81,8 @@ for line in sys.stdin:
                 request("POST", "still here")
                 wait_for(lambda d: any(e["text"] == "first: still here" for e in d["events"]))
                 commit("second")
-                wait_for(lambda d: d["status"]["ready"] and any(e["text"] == "child diagnostic second" for e in d["events"]))
+                previous_session = data["status"]["session_id"]
+                wait_for(lambda d: d["status"]["ready"] and d["status"]["session_id"] != previous_session)
                 request("POST", "updated")
                 wait_for(lambda d: any(e["text"] == "second: updated" for e in d["events"]))
             finally:

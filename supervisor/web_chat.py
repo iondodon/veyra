@@ -11,6 +11,8 @@ import sqlite3
 import threading
 from urllib.parse import parse_qs, urlsplit
 
+from api_credentials import CredentialError, CredentialStore, KEY_NAMES
+
 
 EVENT_PREFIX = "VEYRA_EVENT "
 WEB_PORT = 3000
@@ -25,6 +27,7 @@ class WebChat:
         directory.mkdir(parents=True, exist_ok=True)
         directory.chmod(0o700)
         self.database = directory / "messages.sqlite3"
+        self.credentials = CredentialStore(Path(root) / "state")
         with closing(sqlite3.connect(self.database)) as connection, connection:
             connection.execute("CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, payload TEXT NOT NULL)")
             connection.execute("CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY, value TEXT NOT NULL)")
@@ -40,9 +43,16 @@ class WebChat:
         self.busy = False
         self.approval_id = None
         self.server = None
+        self.begin_session()
+
+    def begin_session(self):
+        with closing(sqlite3.connect(self.database)) as connection:
+            self.session_after = connection.execute("SELECT COALESCE(MAX(id), 0) FROM events").fetchone()[0]
+        self.session_id = secrets.token_hex(12)
+        self.configuration = {"provider": "chatgpt", "model": None, "connected": False, "sign_in_url": None}
 
     def publish(self, text, *, role="system", kind="message", **fields):
-        payload = {"role": role, "kind": kind, "text": str(text), **fields}
+        payload = {"role": role, "kind": kind, "text": self.credentials.redact(str(text)), **fields}
         with closing(sqlite3.connect(self.database, timeout=10)) as connection, connection:
             connection.execute("INSERT INTO events(payload) VALUES (?)", (json.dumps(payload, ensure_ascii=False),))
 
@@ -50,14 +60,40 @@ class WebChat:
         with self.lock:
             with closing(sqlite3.connect(self.database, timeout=10)) as connection:
                 rows = connection.execute(
-                    "SELECT id, payload FROM events WHERE id > ? ORDER BY id LIMIT 200", (after,)
+                    "SELECT id, payload FROM events WHERE id > ? ORDER BY id LIMIT 200", (max(after, self.session_after),)
                 ).fetchall()
+            events = [{"id": row[0], **json.loads(row[1])} for row in rows]
             return {
-                "events": [{"id": row[0], **json.loads(row[1])} for row in rows],
-                "cursor": rows[-1][0] if rows else after, "has_more": len(rows) == 200,
+                "events": [event for event in events if event.get("kind") != "status"],
+                "cursor": rows[-1][0] if rows else max(after, self.session_after), "has_more": len(rows) == 200,
                 "status": {"ready": self.ready, "busy": self.busy, "approval_id": self.approval_id,
-                           "password_is_default": self.network_password == DEFAULT_PASSWORD},
+                           "password_is_default": self.network_password == DEFAULT_PASSWORD,
+                           "session_id": self.session_id, "configuration": dict(self.configuration)},
             }
+
+    def key_settings(self, local):
+        env = self.credentials.environment()
+        return {"can_save_keys": local, "providers": [
+            {"provider": name, "key_name": variable, "configured": bool(env.get(variable))}
+            for name, variable in KEY_NAMES.items()
+        ]}
+
+    def save_api_key(self, payload):
+        if not isinstance(payload, dict):
+            return 400, {"error": "Choose a service and enter its API key."}
+        with self.lock:
+            if self.busy or self.approval_id:
+                return 409, {"error": "Finish the current request before updating API keys."}
+            try:
+                self.credentials.save(payload.get("provider"), payload.get("key"))
+            except CredentialError as exc:
+                return 400, {"error": str(exc)}
+            except OSError:
+                return 500, {"error": "Veyra couldn't save the API key. Check the private state directory."}
+            label = {"openai": "OpenAI", "anthropic": "Anthropic"}[payload["provider"]]
+            self.publish(f"Your {label} API key is saved on this computer and will be available after a reboot. "
+                         f"You can now ask me to use the {label} API.", role="assistant")
+        return 200, {"ok": True}
 
     def change_password(self, payload):
         if not isinstance(payload, dict):
@@ -80,6 +116,7 @@ class WebChat:
 
     def attach(self, process):
         with self.lock:
+            self.begin_session()
             self.process = process
             self.ready = False
             self.busy = False
@@ -124,7 +161,12 @@ class WebChat:
         if kind == "message":
             role = event.get("role", "assistant")
             self.publish(event["text"], role=role if role in ("assistant", "tool", "system") else "assistant",
-                         kind=event.get("kind", "message"))
+                         kind=event.get("kind", "message"),
+                         **({"provider": event.get("provider")} if event.get("kind") == "key_request" else {}))
+        elif kind == "configuration":
+            self.configuration.update({field: event[field] for field in self.configuration if field in event})
+        elif kind == "sign_in":
+            self.configuration["sign_in_url"] = event.get("url")
         elif kind == "approval":
             self.approval_id = event["approval_id"]
             self.publish(event["text"], role="assistant", kind="approval", approval_id=self.approval_id)
@@ -142,13 +184,16 @@ class WebChat:
         if not isinstance(text, str) or not text.strip() or len(text) > 20000:
             return 400, {"error": "Enter a message of 1–20,000 characters."}
         text = text.strip()
+        if self.credentials.contains_secret(text):
+            return 400, {"error": "Use the private API key form to save keys securely.", "open_api_keys": True}
         with self.lock:
             if not self.ready or self.process is None:
                 return 503, {"error": "Veyra is starting. Please wait a moment."}
             if self.busy:
                 return 409, {"error": "Veyra is still working on your last message."}
             approval_id = payload.get("approval_id")
-            if text in ("/approve", "/deny") and (not self.approval_id or approval_id != self.approval_id):
+            approval = text.lower().rstrip(".!").strip()
+            if approval in ("/approve", "/deny", "approve", "deny", "approve these commands", "deny these commands") and (not self.approval_id or approval_id != self.approval_id):
                 return 409, {"error": "That command request is no longer active."}
             self.busy = True
             self.publish(text, role="user")
@@ -215,6 +260,11 @@ class WebChat:
                     except ValueError:
                         return self.respond(400, {"error": "Invalid message cursor."})
                     return self.respond(200, chat.snapshot(after))
+                if parsed.path == "/api/settings":
+                    try:
+                        return self.respond(200, chat.key_settings(self.local_client()))
+                    except (CredentialError, OSError):
+                        return self.respond(500, {"error": "Veyra couldn't read the saved API key settings."})
                 assets = {
                     "/": ("chat.html", "text/html; charset=utf-8"),
                     "/chat.css": ("chat.css", "text/css; charset=utf-8"),
@@ -231,8 +281,11 @@ class WebChat:
                     return self.respond(403, {"error": "Send messages from the Veyra page."})
                 if not self.authenticated():
                     return self.respond(401, {"error": "Sign in with username veyra and your Veyra network password."})
-                if self.path not in ("/api/messages", "/api/password"):
+                if self.path not in ("/api/messages", "/api/password", "/api/keys"):
                     return self.respond(404, {"error": "Page not found."})
+                if self.path == "/api/keys" and not self.local_client():
+                    return self.respond(403, {"error": "Open http://localhost:3000 on the computer running Veyra "
+                                                       "to save API keys securely."})
                 if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
                     return self.respond(415, {"error": "Send JSON."})
                 try:
@@ -242,8 +295,9 @@ class WebChat:
                     payload = json.loads(self.rfile.read(length))
                 except (ValueError, UnicodeDecodeError):
                     return self.respond(400, {"error": "Invalid message."})
-                status, result = (chat.change_password(payload) if self.path == "/api/password"
-                                  else chat.submit(payload))
+                action = {"/api/password": chat.change_password, "/api/keys": chat.save_api_key,
+                          "/api/messages": chat.submit}[self.path]
+                status, result = action(payload)
                 self.respond(status, result)
 
         class Server(ThreadingHTTPServer):

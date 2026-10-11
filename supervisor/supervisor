@@ -26,9 +26,9 @@ class SupervisorError(RuntimeError):
     pass
 
 
-def log(message: str) -> None:
+def log(message: str, *, error=False) -> None:
     if CHAT is not None:
-        CHAT.publish(message, kind="status")
+        CHAT.publish(message, kind="error" if error else "status")
 
 
 def repository_root() -> Path:
@@ -161,14 +161,14 @@ def run_self_test(agent: Path, revision: str) -> bool:
             capture_output=True, text=True, encoding="utf-8", errors="backslashreplace",
         )
     except OSError as exc:
-        log(f"self-test could not start at {label}: {exc}")
+        log(f"Veyra couldn't check its next version: {exc}", error=True)
         return False
 
     for line in (result.stdout + result.stderr).splitlines():
         if line.strip():
             log(line)
     if result.returncode != 0:
-        log(f"self-test failed at {label} with exit code {result.returncode}")
+        log("Veyra couldn't start that version because its self-test failed.", error=True)
         return False
 
     log(f"self-test passed at {label}")
@@ -239,12 +239,12 @@ def main() -> int:
     try:
         lock = acquire_single_instance_lock(root)
     except SupervisorError as exc:
-        log(f"startup failed: {exc}")
+        log(f"Veyra couldn't start: {exc}", error=True)
         return 1
     try:
         CHAT.start()
     except OSError as exc:
-        log(f"Could not open the web chat on port 3000: {exc}")
+        log(f"Could not open the web chat on port 3000: {exc}", error=True)
         os.close(lock)
         return 1
     process = None
@@ -265,7 +265,7 @@ def main() -> int:
             try:
                 requested_revision = current_revision(root)
             except SupervisorError as exc:
-                log(f"could not read HEAD: {exc}")
+                log(f"Veyra couldn't read its current version: {exc}", error=True)
                 return 1
 
             if process is None or requested_revision != active_revision:
@@ -276,7 +276,7 @@ def main() -> int:
                     try:
                         candidate = prepare_checked_out_agent(root, requested_revision)
                     except SupervisorError as exc:
-                        log(f"Cannot start {short_revision(requested_revision)}: {exc}")
+                        log(f"Veyra couldn't start its next version: {exc}", error=True)
                         last_rejection = candidate_key
                     else:
                         if process is not None:
@@ -297,7 +297,7 @@ def main() -> int:
                     log(
                         f"agent at {short_revision(active_revision)} exited with "
                         f"code {code}, but its committed files are no longer "
-                        "checked out; select a working commit and restart"
+                        "checked out; select a working commit and restart", error=True,
                     )
                     process = None
                     active_revision = None
@@ -305,7 +305,7 @@ def main() -> int:
 
                 log(
                     f"agent at {short_revision(active_revision)} exited with "
-                    f"code {code}; restarting in {RESTART_DELAY_SECONDS:g}s"
+                    f"code {code}; restarting in {RESTART_DELAY_SECONDS:g}s", error=True,
                 )
                 time.sleep(RESTART_DELAY_SECONDS)
                 if shutting_down:

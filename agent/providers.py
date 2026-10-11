@@ -13,8 +13,8 @@ depends on which provider is active.
 The ChatGPT provider uses OAuth plan usage, streams stateless Responses
 requests, and adapts namespaced function calls to the same approval loop.
 
-The provider itself is an explicit owner decision persisted with the other
-local state; it is never inferred from which API keys happen to be set.
+New installations default to ChatGPT subscription usage. Later choices are
+persisted; API billing is never inferred from which keys happen to be set.
 """
 
 import json

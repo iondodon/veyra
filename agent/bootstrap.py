@@ -3,14 +3,18 @@
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "supervisor"))
+from api_credentials import CredentialError, CredentialStore, KEY_NAMES
 from providers import (
-    PROVIDER_NAMES, ProviderConfigError, create_provider, provider_available,
+    PROVIDER_NAMES, ProviderConfigError, api_key_env_var, create_provider, provider_available,
     load_selected_provider, parse_provider_choice, save_selected_provider,
 )
 from chatgpt_auth import ChatGPTAuth, ChatGPTError, LOGIN_HELP
@@ -24,6 +28,7 @@ PROMPT = AGENT_DIR / "initial_prompt.md"
 PROVIDER_FILE = STATE / "memory" / "provider.json"
 EVENT_PREFIX = "VEYRA_EVENT "
 SHELL_TOOLS = [{"type": "shell", "environment": {"type": "local"}}]
+EMIT_LOCK = threading.Lock()
 
 
 def current_commit() -> str:
@@ -45,16 +50,18 @@ def load_instructions() -> str:
 
 
 INTRO = (
-    "I'm Veyra. Tell me what you'd like me to do.\n\n"
-    "I can inspect this project, work on this computer, and build my next version. "
-    "I'll ask here before running commands.\n\n"
-    "Choose /provider chatgpt to use your ChatGPT plan, or /provider openai "
-    "or /provider anthropic for API billing. Use /connect to sign in with ChatGPT."
+    "I'm Veyra. You can use me with your ChatGPT subscription or an API. "
+    "Your ChatGPT subscription is the default; no API key is needed.\n\n"
+    "If you prefer API billing, save the key for the service you choose:\n"
+    "• OpenAI: OPENAI_API_KEY\n• Anthropic: ANTHROPIC_API_KEY\n\n"
+    "Use the private API key form in this chat. Saved keys stay on this computer between reboots. "
+    "I'll choose the model and tell you which one is in use. I'll ask before running commands."
 )
 
 
 def emit(event_type, **fields):
-    print(EVENT_PREFIX + json.dumps({"type": event_type, **fields}, ensure_ascii=False), flush=True)
+    with EMIT_LOCK:
+        print(EVENT_PREFIX + json.dumps({"type": event_type, **fields}, ensure_ascii=False), flush=True)
 
 
 def send(text, *, role="assistant", kind="message", **fields):
@@ -62,7 +69,36 @@ def send(text, *, role="assistant", kind="message", **fields):
 
 
 def chat_error(exc):
-    return str(exc).replace(LOGIN_HELP, "Use /connect to sign in with ChatGPT here.")
+    return (str(exc).replace(LOGIN_HELP, "Choose Continue with ChatGPT to sign in.")
+            .replace("Select /provider chatgpt again.", "Ask me to use your ChatGPT subscription again.")
+            .replace("Run agent/START --chatgpt-models.", "Try connecting your ChatGPT account again."))
+
+
+def setup_intent(text):
+    """Handle setup locally, including before any model has been connected."""
+    value = re.sub(r"[.!?]+$", "", text.strip().lower()).strip()
+    value = re.sub(r"\s+", " ", value)
+    value = re.sub(r"^(?:please |i want to |i would like to |can you |could you )", "", value)
+    if value in ("sign in", "sign in with chatgpt", "continue with chatgpt", "connect chatgpt",
+                 "connect my chatgpt account", "sign me in"):
+        return "connect", None
+    if value in ("what model are you using", "which model are you using", "what model is in use",
+                 "show model", "show settings", "what mode are you using"):
+        return "status", None
+    if (any(word in value.split() for word in ("add", "set", "save", "change", "update", "manage", "configure"))
+            and ("api key" in value or "openai_api_key" in value or "anthropic_api_key" in value)):
+        provider = "anthropic" if "anthropic" in value else "openai" if "openai" in value else None
+        return "keys", provider
+    match = re.fullmatch(r"(?:use|switch to|connect to) (?:my |the |an? )?(.+?)(?: please)?", value)
+    if match:
+        choice = match[1]
+        if choice in ("subscription", "chatgpt", "chatgpt subscription", "chatgpt plan", "subscription mode"):
+            return "provider", "chatgpt"
+        if choice in ("openai", "openai api", "anthropic", "anthropic api"):
+            return "provider", choice.split()[0]
+        if choice in ("api", "api mode"):
+            return "keys", None
+    return None, None
 
 
 def run_local(command: str, timeout: int = 120):
@@ -90,45 +126,139 @@ class Conversation:
         self.provider = None
         self.previous_response_id = None
         self.pending = None
+        self.credentials = CredentialStore(STATE)
+        self.selected = None
+        self.active_api_key = None
+        self.login_thread = None
+        self.login_url = None
+        self.lock = threading.RLock()
 
     def start(self):
-        send(f"New agent session · commit {COMMIT_ID}. Earlier messages stay visible; model context starts fresh.",
-             role="system", kind="status")
-        send(INTRO)
-        remembered = load_selected_provider(PROVIDER_FILE)
-        if remembered:
-            try:
-                self.provider = create_provider(remembered)
-                send(f"Using {self.provider.name} · {self.provider.model}.", role="system", kind="status")
-            except ProviderConfigError as exc:
-                send(chat_error(exc), role="system")
-        else:
-            send("Select a provider below to get started.", role="system")
+        send(INTRO, kind="setup")
+        self.selected = load_selected_provider(PROVIDER_FILE) or "chatgpt"
+        try:
+            self.select_provider(self.selected)
+        except ProviderConfigError as exc:
+            self.configuration()
+            if self.selected == "chatgpt" and not provider_available("chatgpt", os.environ):
+                self.connect_subscription()
+            else:
+                send(chat_error(exc), kind="error")
+                if self.selected in KEY_NAMES:
+                    self.request_key(self.selected)
         emit("ready")
 
+    def environment(self):
+        try:
+            return self.credentials.environment()
+        except (CredentialError, OSError) as exc:
+            raise ProviderConfigError(str(exc)) from None
+
+    def configuration(self):
+        emit("configuration", provider=self.selected or "chatgpt",
+             model=self.provider.model if self.provider else None,
+             connected=self.provider is not None, sign_in_url=self.login_url)
+
     def provider_status(self):
-        available = [name for name in PROVIDER_NAMES if provider_available(name)]
-        return "\n".join([
-            "No model provider is selected." if self.provider is None
-            else f"Model provider: {self.provider.name} (model {self.provider.model}).",
-            "Configured providers: " + (", ".join(available) or "none") + ".",
-            "Select /provider chatgpt, /provider openai, or /provider anthropic.",
-            "ChatGPT uses your plan allowance and authorized credits; OpenAI and Anthropic use API billing.",
-            "Use /connect to sign in with ChatGPT, /account for account status, or /models for available models.",
-        ])
+        if self.provider is None:
+            return ("Sign in with your ChatGPT subscription to get started, or add an API key with the private form. "
+                    "You can say ‘Use the OpenAI API’ or ‘Use the Anthropic API’ whenever you want to switch.")
+        label = {"chatgpt": "your ChatGPT subscription", "openai": "the OpenAI API", "anthropic": "the Anthropic API"}
+        return f"I'm using {label[self.provider.name]}. Model in use: {self.provider.model}."
 
     def select_provider(self, choice):
-        provider = create_provider(choice)
+        env = dict(os.environ) if choice == "chatgpt" else self.environment()
+        provider = create_provider(choice, env)
         save_selected_provider(PROVIDER_FILE, choice)
+        self.selected = choice
         self.provider = provider
+        self.active_api_key = env.get(api_key_env_var(choice))
         self.previous_response_id = None
         self.pending = None
         emit("clear_approval")
-        send(f"Using {choice} · {provider.model}. Your choice is saved.")
+        self.configuration()
+        send(self.provider_status())
+
+    def request_key(self, provider=None):
+        label = {"openai": "OpenAI", "anthropic": "Anthropic"}.get(provider)
+        text = (f"Add your {label} API key with the private form below, then ask me to use the {label} API."
+                if label else "Choose OpenAI or Anthropic in the private API key form below. "
+                "OpenAI uses OPENAI_API_KEY; Anthropic uses ANTHROPIC_API_KEY.")
+        send(text, kind="key_request", provider=provider)
+
+    def sign_in_notice(self, message):
+        if message.startswith("Continue with ChatGPT\n"):
+            self.login_url = message.split("\n", 1)[1]
+            emit("sign_in", url=self.login_url)
+
+    def connect_subscription(self):
+        # An explicit sign-in selects subscription usage, even before it finishes.
+        save_selected_provider(PROVIDER_FILE, "chatgpt")
+        self.selected = "chatgpt"
+        self.provider = None
+        self.previous_response_id = None
+        self.pending = None
+        emit("clear_approval")
+        self.configuration()
+        if self.login_thread and self.login_thread.is_alive():
+            send("Continue with ChatGPT using the sign-in link in this chat.")
+            return
+
+        def finish():
+            try:
+                ChatGPTAuth(os.environ.get("VEYRA_CHATGPT_AUTH_FILE")).login(
+                    open_browser=False, notify=self.sign_in_notice,
+                )
+                with self.lock:
+                    self.login_url = None
+                    if self.selected == "chatgpt":
+                        self.select_provider("chatgpt")
+                    else:
+                        self.configuration()
+                        send("Your ChatGPT subscription is connected. You can ask me to use it whenever you want.")
+            except (ChatGPTError, ProviderConfigError, OSError) as exc:
+                with self.lock:
+                    self.login_url = None
+                    self.configuration()
+                    send(chat_error(exc), kind="error")
+            finally:
+                with self.lock:
+                    self.login_thread = None
+
+        self.login_thread = threading.Thread(target=finish, daemon=True)
+        self.login_thread.start()
 
     def handle(self, text, approval_id=None):
+        with self.lock:
+            return self.handle_locked(text, approval_id)
+
+    def handle_locked(self, text, approval_id=None):
+        if self.credentials.contains_secret(text):
+            self.request_key()
+            return
+        approval = re.sub(r"[.!]+$", "", text.strip().lower())
+        if approval in ("approve", "approve these commands", "deny", "deny these commands"):
+            text = "/approve" if approval.startswith("approve") else "/deny"
+        action, choice = setup_intent(text)
+        if action == "connect":
+            self.connect_subscription()
+            return
+        if action == "keys":
+            self.request_key(choice)
+            return
+        if action == "status":
+            send(self.provider_status())
+            return
+        if action == "provider":
+            if choice == "chatgpt" and not provider_available("chatgpt", os.environ):
+                self.connect_subscription()
+            elif choice in KEY_NAMES and not self.environment().get(api_key_env_var(choice)):
+                self.request_key(choice)
+            else:
+                self.select_provider(choice)
+            return
         if text == "/start":
-            send(INTRO)
+            send(INTRO, kind="setup")
             return
         if text == "/provider":
             send(self.provider_status())
@@ -136,15 +266,12 @@ class Conversation:
         if text.startswith("/provider "):
             choice = parse_provider_choice(text.split(maxsplit=1)[1])
             if choice is None:
-                send("Choose /provider chatgpt, /provider openai, or /provider anthropic.")
+                send("You can use your ChatGPT subscription, the OpenAI API, or the Anthropic API.")
             else:
                 self.select_provider(choice)
             return
         if text == "/connect":
-            auth = ChatGPTAuth(os.environ.get("VEYRA_CHATGPT_AUTH_FILE"))
-            auth.login(open_browser=False, notify=send)
-            # Connecting explicitly chooses ChatGPT plan usage, never API billing.
-            self.select_provider("chatgpt")
+            self.connect_subscription()
             return
         if text == "/account":
             send(chat_error(ChatGPTAuth(os.environ.get("VEYRA_CHATGPT_AUTH_FILE")).status()))
@@ -173,6 +300,8 @@ class Conversation:
                 for command in call.action.commands:
                     send("$ " + command, role="tool", kind="command")
                     result = run_local(command)
+                    for stream in ("stdout", "stderr"):
+                        result[stream] = self.credentials.redact(result[stream])
                     results.append(result)
                     preview = (result["stdout"] + "\n" + result["stderr"]).strip()
                     outcome = result["outcome"]
@@ -190,8 +319,12 @@ class Conversation:
                 send("Approve or deny the pending commands first, or select another provider to cancel them.")
                 return
             if self.provider is None:
-                send(self.provider_status())
+                send(self.provider_status(), kind="setup")
                 return
+            if self.provider.name in KEY_NAMES:
+                current_key = self.environment().get(api_key_env_var(self.provider.name))
+                if current_key != self.active_api_key:
+                    self.select_provider(self.provider.name)
             kwargs = {"instructions": self.instructions, "input": text, "tools": SHELL_TOOLS}
             if self.previous_response_id:
                 kwargs["previous_response_id"] = self.previous_response_id
@@ -218,6 +351,7 @@ def self_test() -> int:
     required = [
         ROOT / "supervisor", ROOT / ".git", AGENT_DIR, STATE, WORKSPACE, PROMPT,
         AGENT_DIR / "providers.py", AGENT_DIR / "chatgpt_auth.py", AGENT_DIR / "chatgpt_provider.py",
+        ROOT / "supervisor/api_credentials.py",
     ]
     missing = [str(p) for p in required if not p.exists()]
     if missing:
@@ -255,7 +389,7 @@ def main() -> int:
             message = json.loads(line)
             conversation.handle(message["text"], message.get("approval_id"))
         except (ChatGPTError, ProviderConfigError) as exc:
-            send(chat_error(exc), role="system")
+            send(chat_error(exc), kind="error")
         except Exception as exc:
             send(f"Veyra couldn't complete that request: {exc}", role="system")
         finally:

@@ -23,14 +23,12 @@
       <button type="button" data-password-settings>Change password</button>
     </aside>
     <div class="shortcuts" aria-label="Chat shortcuts">
-      <button type="button" data-command="/provider chatgpt">ChatGPT plan</button>
-      <button type="button" data-command="/connect">Connect ChatGPT</button>
-      <button type="button" data-command="/provider">Provider settings</button>
-      <details><summary>More</summary><div class="menu">
-        <button type="button" data-command="/provider openai">Use OpenAI API</button>
-        <button type="button" data-command="/provider anthropic">Use Anthropic API</button>
-        <button type="button" data-command="/account">ChatGPT account</button>
-        <button type="button" data-command="/models">ChatGPT models</button>
+      <span id="model-status">ChatGPT subscription · preparing…</span>
+      <details><summary>Settings</summary><div class="menu">
+        <button type="button" data-message="Use my ChatGPT subscription.">Use ChatGPT subscription</button>
+        <button type="button" data-message="Use the OpenAI API.">Use OpenAI API</button>
+        <button type="button" data-message="Use the Anthropic API.">Use Anthropic API</button>
+        <button type="button" data-api-keys>API keys</button>
         <button type="button" data-password-settings>Change password</button>
       </div></details>
     </div>
@@ -56,6 +54,29 @@
       <div class="password-actions">
         <button id="password-cancel" type="button">Cancel</button>
         <button id="password-save" type="submit">Save password</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="api-dialog" aria-labelledby="api-title">
+    <form id="api-form" class="password-form">
+      <h2 id="api-title">Private API keys</h2>
+      <p>Save a key for optional API access. API usage is billed separately from your ChatGPT subscription.</p>
+      <p id="api-summary"></p>
+      <p id="api-local-instructions" hidden>To save keys securely, open <a href="http://localhost:3000" target="_blank" rel="noopener noreferrer">localhost:3000</a> on the computer running Veyra. Keys can then be used from any device.</p>
+      <div id="api-key-fields" hidden>
+        <label for="api-provider">Service</label>
+        <select id="api-provider">
+          <option value="openai">OpenAI — OPENAI_API_KEY</option>
+          <option value="anthropic">Anthropic — ANTHROPIC_API_KEY</option>
+        </select>
+        <label for="api-key">API key</label>
+        <input id="api-key" type="password" autocomplete="off" minlength="8" maxlength="4096" spellcheck="false" required disabled>
+        <p class="key-help">Stored privately on this computer across reboots. Never added to chat history or sent to the model.</p>
+      </div>
+      <p id="api-status" role="status"></p>
+      <div class="password-actions">
+        <button id="api-cancel" type="button">Close</button>
+        <button id="api-save" type="submit" disabled>Save key</button>
       </div>
     </form>
   </dialog>

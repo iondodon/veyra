@@ -82,9 +82,12 @@ class ProviderWiringTests(unittest.TestCase):
             bootstrap.STATE / "memory" / "provider.json",
         )
 
-    def test_intro_explains_explicit_provider_selection(self):
-        self.assertIn("/provider openai", bootstrap.INTRO)
-        self.assertIn("/provider anthropic", bootstrap.INTRO)
+    def test_intro_explains_subscription_default_and_optional_api_keys(self):
+        self.assertIn("subscription is the default", bootstrap.INTRO)
+        self.assertIn("OPENAI_API_KEY", bootstrap.INTRO)
+        self.assertIn("ANTHROPIC_API_KEY", bootstrap.INTRO)
+        self.assertNotIn("/provider", bootstrap.INTRO)
+        self.assertNotIn("/connect", bootstrap.INTRO)
 
     def test_provider_command_persists_the_choice(self):
         source = Path(bootstrap.__file__).read_text(encoding="utf-8")

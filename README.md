@@ -39,43 +39,50 @@ Localhost access works directly. Complete ChatGPT sign-in on the computer
 running Veyra before using the chat from another device.
 
 The page reminds you to update the default password. Click **Change password**
-in the reminder or under **More** and choose a password of at least 8 characters.
+in the reminder or under **Settings** and choose a password of at least 8 characters.
 Your password is stored privately in `state/chat/messages.sqlite3`, survives
 restarts, and is never sent to the model or added to the conversation. Normal
 startup prints only the page address. Network access uses HTTP and is intended
 for your trusted private network.
 
-The page remains available while the agent starts or changes commits.
-Conversation history is saved under `state/chat/` and survives reloads and
-restarts. Model context starts fresh after an agent restart; previous messages
-remain visible in the page. Pending command approvals are cancelled on restart.
+The page remains available while the agent starts or changes commits. Each
+agent start opens a clean visible conversation with a plain-language setup
+message. Reloading the page keeps the current conversation. Earlier sessions
+remain saved under `state/chat/`; routine startup diagnostics are hidden from
+the chat. Errors that need attention still appear there. Pending command
+approvals are cancelled on restart.
 
 ## Connect a model
 
 ### Use your ChatGPT plan
 
-Click **Connect ChatGPT** in the page, or send `/connect`. Follow the
-**Continue with ChatGPT** link in the chat and authorize Veyra. Return to the
-chat after signing in. Veyra selects the ChatGPT provider and remembers it.
-If you already signed in, click **ChatGPT plan** or send `/provider chatgpt`.
+ChatGPT subscription usage is the default for a new installation. Veyra
+automatically prepares a **Continue with ChatGPT** link in the chat when
+sign-in is needed. Open it on the computer running Veyra, authorize Veyra,
+and return to the chat. Sign-in can wait in the background while you choose
+another usage mode. Later starts reuse the saved account.
 
 This explicitly uses your ChatGPT plan allowance and any credits you
 authorize. Veyra never automatically switches to API billing. Eligibility,
 app limits, and credits are managed in **ChatGPT Settings → Usage**. Sign-in
 and usage problems appear in the chat.
 
-Useful chat commands:
+Use natural language to manage setup, or choose a service under **Settings**:
 
-| Command | Action |
+| Say | Action |
 | --- | --- |
-| `/connect` | Connect ChatGPT and select plan usage |
-| `/provider` | Show the selected provider and model |
-| `/provider chatgpt` | Select a connected ChatGPT plan |
-| `/account` | Show ChatGPT account and plan permission |
-| `/models` | List models available to your ChatGPT account |
+| “Sign in with ChatGPT” | Prepare a subscription sign-in link |
+| “Use my ChatGPT subscription” | Select subscription usage |
+| “What model are you using?” | Show the current usage mode and model |
+| “Use the OpenAI API” | Select OpenAI API billing |
+| “Use the Anthropic API” | Select Anthropic API billing |
+| “Add my API key” | Open the private key form from the chat |
 
-Without `CHATGPT_MODEL`, Veyra uses the first visible model in the account's
-catalog. Set `CHATGPT_MODEL` before starting if you want a specific model.
+Veyra chooses the model automatically and shows its name in the chat and
+above the composer. Subscription usage uses the first visible model in the
+account's catalog. API defaults are `gpt-5.6` for OpenAI and `claude-opus-5`
+for Anthropic. Advanced installations can override these presets with
+`CHATGPT_MODEL`, `OPENAI_MODEL`, or `ANTHROPIC_MODEL` before startup.
 
 This uses OpenAI's documented [Sign in with ChatGPT flow](https://developers.openai.com/siwc/token-sharing-open-source)
 and [request requirements](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations).
@@ -101,20 +108,32 @@ Normal Veyra startup prints only the page address.
 
 ### API billing
 
-Set the key before starting Veyra, then choose that provider in the web chat:
+Open Veyra at `http://localhost:3000` on the computer running it. Click
+**Private API key form** in the setup message or **Settings → API keys**.
+Choose a service and save its key:
 
-```bash
-export OPENAI_API_KEY="..."
-export ANTHROPIC_API_KEY="..."
-# Optional:
-export OPENAI_MODEL="..."
-export ANTHROPIC_MODEL="..."
-```
+| Service | Key |
+| --- | --- |
+| OpenAI | `OPENAI_API_KEY` |
+| Anthropic | `ANTHROPIC_API_KEY` |
 
-Send `/provider openai` or `/provider anthropic`. Credentials make a provider
-available; they never select one. The explicit selection is stored under
-`state/memory/provider.json` and survives restarts. The **More** menu also
-contains these choices.
+Only the key for your chosen API is needed. The form masks the value and
+sends it directly to local credential storage. Keys are saved atomically in
+`state/auth/api_keys.json` with owner-only permissions, ignored by Git, and
+loaded automatically after reboots. Saved keys override environment keys;
+existing environment configuration is also supported. Replacing a key takes
+effect before the next API request.
+
+Key entry is limited to localhost because the LAN chat uses unencrypted HTTP.
+The LAN page shows which services are configured and can use saved keys, but
+does not send new keys over the network. Keys are never placed in conversation
+history or sent as model input. Pasted keys in ordinary messages are blocked;
+recognized keys in diagnostics and replies are redacted.
+
+Saving a key makes that API available. Say **“Use the OpenAI API”** or
+**“Use the Anthropic API”** to select API billing explicitly. Your selection
+is stored under `state/memory/provider.json` and survives restarts. Completing
+a pending subscription sign-in preserves any API mode chosen in the meantime.
 
 ## Local commands
 
@@ -136,6 +155,7 @@ veyra/
 ├── supervisor/     # lifecycle boundary and local web chat
 │   ├── supervisor
 │   ├── web_chat.py
+│   ├── api_credentials.py
 │   ├── chat.html
 │   ├── chat.css
 │   └── chat.js
@@ -146,15 +166,17 @@ veyra/
 Only one supervisor may run per repository. It owns the web page and holds
 an exclusive lock under `state/`. It reads `HEAD`, requires a clean,
 Git-tracked `agent/`, runs `agent/START --self-test`, and starts that agent.
-Startup checks and child output go to the chat.
+Startup checks and child diagnostics are saved locally; routine output stays
+hidden in the chat, while errors that need attention are shown.
 
 The agent receives JSON lines on stdin containing `text` and an optional
 `approval_id`. Chat events on stdout start with `VEYRA_EVENT ` followed by
-JSON. Other child output is shown as system messages. The transport is local
+JSON. Other child output is saved as hidden diagnostic messages. The transport is local
 and does not send chat messages to a third-party messaging service.
 
 The supervisor watches `HEAD`. After a successor commit passes its self-test,
-it restarts the agent while keeping the web page and transcript available.
+it restarts the agent while keeping the web page available and opening a fresh
+conversation for the new agent session.
 If a candidate fails, the current process keeps running and the chat reports
 the problem. Changes to the supervisor or page assets take effect when the
 supervisor is restarted.

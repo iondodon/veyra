@@ -7,6 +7,10 @@ const connection = document.querySelector("#connection");
 const passwordDialog = document.querySelector("#password-dialog");
 const passwordForm = document.querySelector("#password-form");
 const passwordStatus = document.querySelector("#password-status");
+const apiDialog = document.querySelector("#api-dialog");
+const apiForm = document.querySelector("#api-form");
+const apiStatus = document.querySelector("#api-status");
+const apiKey = document.querySelector("#api-key");
 let cursor = 0;
 let state = {ready: false, busy: false, approval_id: null};
 let posting = false;
@@ -14,6 +18,8 @@ let connected = false;
 let notice = "";
 let authorization = "";
 let passwordSaving = false;
+let keySaving = false;
+let canSaveKeys = false;
 let pollComplete = Promise.resolve();
 
 function requestHeaders(json = false) {
@@ -22,9 +28,9 @@ function requestHeaders(json = false) {
 }
 
 function refreshControls() {
-  const available = connected && state.ready && !state.busy && !posting && !passwordSaving;
+  const available = connected && state.ready && !state.busy && !posting && !passwordSaving && !keySaving;
   sendButton.disabled = !available || !input.value.trim();
-  document.querySelectorAll("[data-command]").forEach(button => { button.disabled = !available; });
+  document.querySelectorAll("[data-message]").forEach(button => { button.disabled = !available; });
   document.querySelectorAll("[data-approval]").forEach(button => {
     button.disabled = !available || button.dataset.approval !== state.approval_id;
   });
@@ -35,6 +41,19 @@ function refreshControls() {
   connection.classList.toggle("online", connected && state.ready);
   document.querySelector("#password-reminder").hidden = !state.password_is_default;
   document.body.classList.toggle("password-required", Boolean(state.password_is_default));
+  const configuration = state.configuration || {};
+  const label = {chatgpt: "ChatGPT subscription", openai: "OpenAI API", anthropic: "Anthropic API"}[configuration.provider] || "ChatGPT subscription";
+  document.querySelector("#model-status").textContent = label + (configuration.model ? " · " + configuration.model : " · awaiting setup");
+  const needsSignIn = configuration.provider === "chatgpt" && !configuration.connected;
+  document.querySelectorAll("[data-signin-link]").forEach(link => {
+    link.hidden = !needsSignIn || !configuration.sign_in_url;
+    if (configuration.sign_in_url) link.href = configuration.sign_in_url;
+    else link.removeAttribute("href");
+  });
+  document.querySelectorAll("[data-signin-button]").forEach(button => {
+    button.hidden = !needsSignIn || Boolean(configuration.sign_in_url);
+  });
+  document.querySelectorAll("[data-signin-help]").forEach(note => { note.hidden = !needsSignIn; });
 }
 
 function appendText(element, text) {
@@ -69,16 +88,49 @@ function appendMessage(event) {
   if (event.kind === "approval") {
     const actions = document.createElement("div");
     actions.className = "approval-actions";
-    for (const [command, title] of [["/approve", "Approve commands"], ["/deny", "Deny"]]) {
+    for (const [command, title] of [["Approve these commands.", "Approve commands"], ["Deny these commands.", "Deny"]]) {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = title;
       button.dataset.approval = event.approval_id;
-      if (command === "/approve") button.className = "approve";
+      if (command.startsWith("Approve")) button.className = "approve";
       button.addEventListener("click", () => submit(command, event.approval_id));
       actions.append(button);
     }
     article.append(actions);
+  }
+  if (event.kind === "setup" || event.kind === "key_request") {
+    const actions = document.createElement("div");
+    actions.className = "setup-actions";
+    if (event.kind === "setup") {
+      const link = document.createElement("a");
+      link.dataset.signinLink = "";
+      link.textContent = "Continue with ChatGPT ↗";
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.hidden = true;
+      const signIn = document.createElement("button");
+      signIn.type = "button";
+      signIn.dataset.signinButton = "";
+      signIn.dataset.message = "Sign in with ChatGPT.";
+      signIn.textContent = "Continue with ChatGPT";
+      signIn.hidden = true;
+      signIn.addEventListener("click", () => submit(signIn.dataset.message));
+      actions.append(link, signIn);
+    }
+    const keys = document.createElement("button");
+    keys.type = "button";
+    keys.textContent = "Private API key form";
+    keys.addEventListener("click", () => openApiKeys(event.provider));
+    actions.append(keys);
+    article.append(actions);
+    if (event.kind === "setup") {
+      const note = document.createElement("p");
+      note.className = "setup-help";
+      note.dataset.signinHelp = "";
+      note.textContent = "Complete sign-in on the computer running Veyra.";
+      article.append(note);
+    }
   }
   messages.append(article);
 }
@@ -91,6 +143,14 @@ async function loadEvents() {
       const response = await fetch("/api/events?after=" + cursor, {cache: "no-store", headers: requestHeaders()});
       if (!response.ok) throw new Error("Connection unavailable");
       const data = await response.json();
+      if (state.session_id && state.session_id !== data.status.session_id) {
+        messages.replaceChildren();
+        cursor = 0;
+        state = data.status;
+        notice = "";
+        more = true;
+        continue;
+      }
       data.events.forEach(appendMessage);
       cursor = data.cursor;
       state = data.status;
@@ -111,7 +171,7 @@ async function poll() {
 }
 
 async function submit(text, approvalId = null) {
-  if (posting || !connected || !state.ready || state.busy || passwordSaving) return;
+  if (posting || !connected || !state.ready || state.busy || passwordSaving || keySaving) return;
   posting = true;
   notice = "";
   refreshControls();
@@ -121,6 +181,11 @@ async function submit(text, approvalId = null) {
       body: JSON.stringify({text, approval_id: approvalId}),
     });
     const result = await response.json();
+    if (result.open_api_keys) {
+      input.value = "";
+      input.style.height = "";
+      openApiKeys();
+    }
     if (!response.ok) throw new Error(result.error || "Could not send your message.");
     state.busy = true;
     if (input.value.trim() === text) { input.value = ""; input.style.height = ""; }
@@ -133,7 +198,7 @@ async function submit(text, approvalId = null) {
 document.querySelector("#composer").addEventListener("submit", event => {
   event.preventDefault();
   const text = input.value.trim();
-  submit(text, ["/approve", "/deny"].includes(text) ? state.approval_id : null);
+  submit(text, /^(?:\/approve|\/deny|approve(?: these commands)?|deny(?: these commands)?)[.!]?$/i.test(text) ? state.approval_id : null);
 });
 input.addEventListener("keydown", event => {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
@@ -146,8 +211,68 @@ input.addEventListener("input", () => {
   input.style.height = Math.min(input.scrollHeight, 180) + "px";
   refreshControls();
 });
-document.querySelectorAll("[data-command]").forEach(button => {
-  button.addEventListener("click", () => submit(button.dataset.command));
+document.querySelectorAll("[data-message]").forEach(button => {
+  button.addEventListener("click", () => submit(button.dataset.message));
+});
+document.querySelectorAll("[data-api-keys]").forEach(button => {
+  button.addEventListener("click", () => openApiKeys());
+});
+
+async function openApiKeys(provider) {
+  document.querySelectorAll("details").forEach(details => { details.open = false; });
+  apiForm.reset();
+  if (["openai", "anthropic"].includes(provider)) document.querySelector("#api-provider").value = provider;
+  canSaveKeys = false;
+  apiKey.disabled = true;
+  document.querySelector("#api-key-fields").hidden = true;
+  document.querySelector("#api-local-instructions").hidden = true;
+  document.querySelector("#api-summary").textContent = "";
+  document.querySelector("#api-save").disabled = true;
+  apiStatus.textContent = "Loading settings…";
+  if (!apiDialog.open) apiDialog.showModal();
+  try {
+    const response = await fetch("/api/settings", {headers: requestHeaders(), cache: "no-store"});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Could not load API settings.");
+    canSaveKeys = result.can_save_keys;
+    document.querySelector("#api-summary").textContent = result.providers.map(item =>
+      item.key_name + ": " + (item.configured ? "configured" : "not set")).join(" · ");
+    document.querySelector("#api-key-fields").hidden = !canSaveKeys;
+    document.querySelector("#api-local-instructions").hidden = canSaveKeys;
+    apiKey.disabled = !canSaveKeys;
+    document.querySelector("#api-save").disabled = !canSaveKeys;
+    apiStatus.textContent = "";
+    if (canSaveKeys) apiKey.focus();
+  } catch (error) { apiStatus.textContent = error.message; }
+}
+
+document.querySelector("#api-cancel").addEventListener("click", () => apiDialog.close());
+apiDialog.addEventListener("cancel", event => { if (keySaving) event.preventDefault(); });
+apiDialog.addEventListener("close", () => { apiForm.reset(); apiStatus.textContent = ""; });
+apiForm.addEventListener("submit", async event => {
+  event.preventDefault();
+  if (keySaving || !canSaveKeys) return;
+  keySaving = true;
+  apiStatus.textContent = "Saving…";
+  document.querySelector("#api-save").disabled = true;
+  document.querySelector("#api-cancel").disabled = true;
+  refreshControls();
+  try {
+    const response = await fetch("/api/keys", {
+      method: "POST", headers: requestHeaders(true),
+      body: JSON.stringify({provider: document.querySelector("#api-provider").value, key: apiKey.value}),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Could not save the API key.");
+    apiDialog.close();
+  } catch (error) { apiStatus.textContent = error.message; }
+  finally {
+    apiKey.value = "";
+    keySaving = false;
+    document.querySelector("#api-save").disabled = !canSaveKeys;
+    document.querySelector("#api-cancel").disabled = false;
+    refreshControls();
+  }
 });
 document.querySelectorAll("[data-password-settings]").forEach(button => {
   button.addEventListener("click", () => {
