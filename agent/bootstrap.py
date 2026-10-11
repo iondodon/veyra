@@ -573,6 +573,8 @@ def self_test() -> int:
         AGENT_DIR / "release_notes.py", AGENT_DIR / "release_notes.json",
         AGENT_DIR / "app_updates.js",
         AGENT_DIR / "api_credentials.py",
+        AGENT_DIR / "system_dashboard.py", AGENT_DIR / "dashboard.html",
+        AGENT_DIR / "dashboard.js", AGENT_DIR / "dashboard.css",
     ]
     missing = [str(p) for p in required if not p.exists()]
     if missing:

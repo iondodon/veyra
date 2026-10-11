@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>System dashboard · Veyra</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/chat.css">
+  <link rel="stylesheet" href="/dashboard.css">
+  <script src="/dashboard.js" defer></script>
+</head>
+<body>
+  <header>
+    <a class="brand" href="/" aria-label="Veyra chat"><span class="mark">v</span>Veyra<span class="local">LOCAL</span></a>
+    <nav aria-label="Navigation"><a href="/">Chat</a><a href="/recovery">Recovery</a></nav>
+  </header>
+  <main>
+    <span class="eyebrow">YOUR LOCAL SYSTEM</span>
+    <h1>System dashboard</h1>
+    <p class="intro">A read-only overview of the computer running Veyra.</p>
+    <div class="dashboard-toolbar"><p id="dashboard-status" role="status">Loading system status…</p><button id="refresh" type="button">Refresh</button></div>
+    <div class="dashboard-grid">
+      <section class="card" aria-labelledby="runtime-title"><h2 id="runtime-title">Veyra runtime</h2><p id="runtime" class="metric">—</p><dl><dt>Runtime uptime</dt><dd id="agent-uptime">—</dd><dt>Command approval</dt><dd id="approval">—</dd><dt>Service</dt><dd id="provider">—</dd><dt>Model</dt><dd id="model">—</dd><dt>Service connection</dt><dd id="service">—</dd></dl></section>
+      <section class="card" aria-labelledby="host-title"><h2 id="host-title">Host &amp; CPU</h2><p id="os" class="metric">—</p><dl><dt>Host uptime</dt><dd id="host-uptime">—</dd><dt>Logical CPUs</dt><dd id="cpus">—</dd><dt>Load · 1 / 5 / 15 min</dt><dd id="load">—</dd></dl><p class="note">Load counts runnable or waiting tasks, not CPU utilization. Host metrics may reflect the container or OS environment.</p></section>
+      <section class="card" aria-labelledby="memory-title"><h2 id="memory-title">Memory</h2><p id="memory" class="metric">—</p><progress id="memory-bar" max="100" value="0" aria-label="Memory used" hidden></progress><p id="memory-detail" class="note">—</p><p class="note">Used memory is total minus available memory.</p></section>
+      <section class="card" aria-labelledby="disk-title"><h2 id="disk-title">Storage</h2><p id="disk" class="metric">—</p><progress id="disk-bar" max="100" value="0" aria-label="Storage used" hidden></progress><p id="disk-detail" class="note">—</p><p class="note">Filesystem containing Veyra’s project.</p></section>
+      <section class="card version" aria-labelledby="version-title"><h2 id="version-title">Current version</h2><dl><dt>Branch</dt><dd id="branch">—</dd><dt>Commit</dt><dd id="commit">—</dd><dt>Working tree</dt><dd id="changes">—</dd></dl><p class="note">For startup problems or restoring a working version, use <a href="/recovery">Recovery</a>. Credentials and persistent state remain outside version restoration.</p></section>
+    </div>
+    <p class="note">Updates every five seconds while this page is visible. Unsupported metrics show “Unavailable”. No credentials, logs, or conversation content are displayed.</p>
+  </main>
+</body>
+</html>

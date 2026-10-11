@@ -35,3 +35,4 @@ html.chat-app,.chat-page{height:100%;overflow:hidden;overscroll-behavior:none}
   .chat-page.keyboard-open #password-reminder,.chat-page.keyboard-open .hint{display:none}
   .chat-page.keyboard-open footer{padding-bottom:10px}
 }
+.dashboard-link{margin-left:auto;color:#6b6f60;font-size:12px;text-underline-offset:3px}

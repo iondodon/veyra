@@ -87,6 +87,26 @@ for line in sys.stdin:
         self.assertEqual([e["text"] for e in events], ["hello", "Reply: hello"])
         self.assertEqual(events[0]["role"], "user")
 
+    def test_dashboard_is_read_only_and_excludes_private_configuration(self):
+        self.chat.configuration.update(provider="chatgpt", model="test-model", connected=True,
+                                       sign_in_url="https://private-signin.example/secret")
+        self.chat.approval_id = "private-approval-id"
+        status, body = self.request("GET", "/api/dashboard")
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data["agent"]["model"], "test-model")
+        self.assertTrue(data["agent"]["approval_pending"])
+        self.assertNotIn(b"private-signin", body)
+        self.assertNotIn(b"private-approval-id", body)
+        self.assertNotIn(b"network_password", body)
+        self.assertEqual(self.request("POST", "/api/dashboard", {})[0], 404)
+        for path in ("/dashboard", "/dashboard.js", "/dashboard.css"):
+            self.assertEqual(self.request("GET", path)[0], 200)
+        with patch.object(self.chat.server.RequestHandlerClass, "local_client", return_value=False):
+            self.assertEqual(self.request("GET", "/api/dashboard")[0], 401)
+            credential = "Basic " + base64.b64encode(b"veyra:veyra").decode()
+            self.assertEqual(self.request("GET", "/api/dashboard", headers={"Authorization": credential})[0], 200)
+
     def test_initial_configuration_has_no_service_or_model(self):
         status, data = self.request("GET", "/api/events")
         self.assertEqual(status, 200)

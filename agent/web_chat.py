@@ -14,6 +14,8 @@ import sqlite3
 import threading
 from urllib.parse import parse_qs, urlsplit
 
+from system_dashboard import SystemDashboard
+
 import sys
 from api_credentials import CredentialError, CredentialStore, KEY_NAMES
 from release_notes import load_notes
@@ -30,7 +32,8 @@ class WebChat:
     def __init__(self, root):
         self.release_notes = load_notes(root)
         self.assets = {filename: (ASSETS / filename).read_bytes()
-                       for filename in ("chat.html", "chat.js", "chat.css", "app_updates.js")}
+                       for filename in ("chat.html", "chat.js", "chat.css", "app_updates.js",
+                                        "dashboard.html", "dashboard.js", "dashboard.css")}
         directory = Path(root) / "state/chat"
         directory.mkdir(parents=True, exist_ok=True)
         directory.chmod(0o700)
@@ -53,6 +56,7 @@ class WebChat:
         self.approval_id = None
         self.server = None
         self.begin_session()
+        self.dashboard = SystemDashboard(root)
 
     def begin_session(self):
         with closing(sqlite3.connect(self.database)) as connection:
@@ -299,6 +303,8 @@ class WebChat:
                     return self.respond(200, {"ready": chat.ready, "busy": chat.busy})
                 if parsed.path == "/api/app-version":
                     return self.respond(200, {"ready": chat.ready, "ui_version": chat.ui_version})
+                if parsed.path == "/api/dashboard":
+                    return self.respond(200, chat.dashboard.snapshot(chat))
                 if parsed.path == "/api/events":
                     try:
                         after = max(0, int(parse_qs(parsed.query).get("after", ["0"])[0]))
@@ -317,6 +323,9 @@ class WebChat:
                 assets = {
                     "/": ("chat.html", "text/html; charset=utf-8"),
                     "/chat.css": ("chat.css", "text/css; charset=utf-8"),
+                    "/dashboard": ("dashboard.html", "text/html; charset=utf-8"),
+                    "/dashboard.js": ("dashboard.js", "text/javascript; charset=utf-8"),
+                    "/dashboard.css": ("dashboard.css", "text/css; charset=utf-8"),
                     "/chat.js": ("chat.js", "text/javascript; charset=utf-8"),
                     "/app-updates.js": ("app_updates.js", "text/javascript; charset=utf-8"),
                 }
