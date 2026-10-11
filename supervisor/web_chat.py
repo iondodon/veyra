@@ -1,9 +1,12 @@
-"""Local-only chat transport, kept alive while the agent changes commits."""
+"""Local web chat, with authenticated access from other devices."""
 
+import base64
 from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import ipaddress
 import json
 from pathlib import Path
+import secrets
 import sqlite3
 import threading
 from urllib.parse import parse_qs, urlsplit
@@ -23,6 +26,12 @@ class WebChat:
         self.database = directory / "messages.sqlite3"
         with closing(sqlite3.connect(self.database)) as connection, connection:
             connection.execute("CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, payload TEXT NOT NULL)")
+            connection.execute("CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            connection.execute("INSERT OR IGNORE INTO settings(name, value) VALUES ('network_password', ?)",
+                               (secrets.token_urlsafe(18),))
+            self.network_password = connection.execute(
+                "SELECT value FROM settings WHERE name = 'network_password'"
+            ).fetchone()[0]
         self.database.chmod(0o600)
         self.lock = threading.RLock()
         self.process = None
@@ -143,7 +152,21 @@ class WebChat:
                 self.connection.settimeout(10)
 
             def allowed_host(self):
-                return self.headers.get("Host") in (f"localhost:{self.server.server_port}", f"127.0.0.1:{self.server.server_port}")
+                port = self.server.server_port
+                address = self.connection.getsockname()[0]
+                return self.headers.get("Host") in (
+                    f"localhost:{port}", f"127.0.0.1:{port}", f"{address}:{port}",
+                )
+
+            def local_client(self):
+                return ipaddress.ip_address(self.client_address[0]).is_loopback
+
+            def authenticated(self):
+                if self.local_client():
+                    return True
+                scheme, _, credentials = self.headers.get("Authorization", "").partition(" ")
+                expected = base64.b64encode(("veyra:" + chat.network_password).encode())
+                return scheme.lower() == "basic" and secrets.compare_digest(credentials.encode(), expected)
 
             def respond(self, status, data, content_type="application/json; charset=utf-8"):
                 body = json.dumps(data).encode() if isinstance(data, dict) else data
@@ -154,12 +177,16 @@ class WebChat:
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.send_header("Referrer-Policy", "no-referrer")
                 self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+                if status == 401:
+                    self.send_header("WWW-Authenticate", 'Basic realm="Veyra", charset="UTF-8"')
                 self.end_headers()
                 self.wfile.write(body)
 
             def do_GET(self):
                 if not self.allowed_host():
-                    return self.respond(403, {"error": "Open Veyra on localhost."})
+                    return self.respond(403, {"error": "Open Veyra using this computer's IP address or localhost."})
+                if not self.authenticated():
+                    return self.respond(401, {"error": "Sign in with username veyra and your Veyra network password."})
                 parsed = urlsplit(self.path)
                 if parsed.path == "/api/events":
                     try:
@@ -181,6 +208,8 @@ class WebChat:
                 origin = self.headers.get("Origin")
                 if not self.allowed_host() or origin != "http://" + self.headers.get("Host", ""):
                     return self.respond(403, {"error": "Send messages from the Veyra page."})
+                if not self.authenticated():
+                    return self.respond(401, {"error": "Sign in with username veyra and your Veyra network password."})
                 if self.path != "/api/messages":
                     return self.respond(404, {"error": "Page not found."})
                 if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
@@ -200,7 +229,7 @@ class WebChat:
                 # Reloads may close sockets mid-response. Never write to the terminal.
                 pass
 
-        self.server = Server(("127.0.0.1", port), Handler)
+        self.server = Server(("0.0.0.0", port), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         return self.server.server_port
 

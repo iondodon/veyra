@@ -1,3 +1,4 @@
+import base64
 import http.client
 import json
 from pathlib import Path
@@ -6,6 +7,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from web_chat import WebChat
@@ -119,6 +121,29 @@ for line in sys.stdin:
             self.assertEqual(self.request("POST", "/api/messages", payload)[0], 400)
         self.assertEqual(self.request("GET", "/api/events?after=oops")[0], 400)
         self.assertEqual(self.request("GET", "/../state/systemd.env")[0], 404)
+
+    def test_network_access_requires_password_for_page_transcript_and_commands(self):
+        self.attach_agent()
+        handler = self.chat.server.RequestHandlerClass
+        credential = "Basic " + base64.b64encode(("veyra:" + self.chat.network_password).encode()).decode()
+        with patch.object(handler, "local_client", return_value=False):
+            for path in ("/", "/chat.js", "/api/events"):
+                self.assertEqual(self.request("GET", path)[0], 401)
+                self.assertEqual(self.request("GET", path, headers={"Authorization": "Basic wrong"})[0], 401)
+                self.assertEqual(self.request("GET", path, headers={"Authorization": credential})[0], 200)
+            self.assertEqual(self.request("POST", "/api/messages", {"text": "hello"})[0], 401)
+            self.assertFalse(self.chat.busy)
+            self.assertEqual(self.request("POST", "/api/messages", {"text": "hello"},
+                             {"Authorization": credential, "Origin": "https://attacker.example"})[0], 403)
+            self.assertEqual(self.request("POST", "/api/messages", {"text": "hello"},
+                             {"Authorization": credential})[0], 202)
+
+    def test_network_password_is_stable_across_restarts_and_stays_out_of_chat(self):
+        restarted = WebChat(self.root)
+        self.assertEqual(restarted.network_password, self.chat.network_password)
+        self.assertGreaterEqual(len(self.chat.network_password), 24)
+        self.assertNotIn(self.chat.network_password, json.dumps(self.chat.snapshot(0)))
+        self.assertEqual(self.chat.database.stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == "__main__":
