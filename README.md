@@ -85,6 +85,15 @@ Use natural language to manage setup, or choose a service under **Settings**:
 | “Use the OpenAI API” | Select OpenAI API billing |
 | “Use the Anthropic API” | Select Anthropic API billing |
 | “Add my API key” | Open the private key form from the chat |
+| “Log out”, “Sign out”, or “Disconnect” | Disconnect the current service and return to setup |
+
+All connection choices are also under **Settings**. Save API keys under
+**Settings → API keys**. **Settings → Disconnect current service** signs out
+the active subscription or disconnects API mode, clears its remembered service
+choice, and cancels pending sign-ins and command approvals. Saved API keys remain
+available for your next explicit API choice. After logout, the chat offers both
+subscriptions and API setup again. If a subscription is signed out elsewhere,
+the next request detects it and returns to these same choices.
 
 Veyra chooses the model automatically and shows its name in the chat and
 above the composer. ChatGPT usage uses the first visible model in the

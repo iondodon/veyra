@@ -86,7 +86,10 @@ class ConversationTests(unittest.TestCase):
             thread = self.chat.login_thread
             if thread:
                 thread.join(timeout=2)
-            auth.return_value.login.assert_called_once_with(open_browser=False, notify=self.chat.sign_in_notice)
+            auth.return_value.login.assert_called_once()
+            options = auth.return_value.login.call_args.kwargs
+            self.assertFalse(options["open_browser"])
+            self.assertIs(options["cancel_event"], self.chat.login_cancel)
             select.assert_called_once_with("chatgpt")
             self.assertTrue(any(event.get("url") == "https://auth.openai.com/fixture" for event in self.events))
 
@@ -331,6 +334,132 @@ class ConversationTests(unittest.TestCase):
                 if thread:
                     thread.join(timeout=2)
             select.assert_called_once_with("claude")
+
+    def assert_setup_choices(self, text):
+        for expected in ("ChatGPT", "Claude", "OpenAI API", "Anthropic API", "Settings → API keys"):
+            self.assertIn(expected, text)
+
+    def test_disconnected_guidance_is_the_same_for_every_previous_service(self):
+        self.chat.provider = None
+        for selected in (None, "chatgpt", "claude", "openai", "anthropic"):
+            self.chat.selected = selected
+            self.assert_setup_choices(self.chat.provider_status())
+        for help_text in (bootstrap.LOGIN_HELP, bootstrap.CLAUDE_LOGIN_HELP):
+            self.assert_setup_choices(bootstrap.chat_error(RuntimeError(help_text)))
+        self.assertIn("Settings", bootstrap.INTRO)
+
+    def test_chatgpt_logout_clears_selection_context_and_approval_without_model_or_shell(self):
+        original = self.chat.provider
+        self.chat.selected = "chatgpt"
+        self.chat.previous_response_id = "old-response"
+        self.chat.pending = (None, [self.call], "old-approval")
+        bootstrap.save_selected_provider(bootstrap.PROVIDER_FILE, "chatgpt")
+        with patch.object(bootstrap, "ChatGPTAuth") as auth, patch.object(bootstrap, "run_local") as run:
+            auth.return_value.logout.return_value = "Signed out of ChatGPT."
+            self.chat.handle("Please log me out.")
+            self.chat.handle("Hi")
+        auth.return_value.logout.assert_called_once()
+        original.create_response.assert_not_called()
+        run.assert_not_called()
+        self.assertIsNone(self.chat.provider)
+        self.assertIsNone(self.chat.selected)
+        self.assertIsNone(self.chat.pending)
+        self.assertIsNone(self.chat.previous_response_id)
+        self.assertIsNone(bootstrap.load_selected_provider(bootstrap.PROVIDER_FILE))
+        self.assert_setup_choices(self.events[-1]["text"])
+        self.assertEqual(self.events[-1]["kind"], "setup")
+
+    def test_api_disconnect_retains_saved_keys_and_does_not_start_signin(self):
+        self.chat.provider.name = "openai"
+        self.chat.selected = "openai"
+        self.chat.credentials.save("openai", "sk-fixture-key-retained-after-disconnect")
+        bootstrap.save_selected_provider(bootstrap.PROVIDER_FILE, "openai")
+        with patch.object(bootstrap, "ChatGPTAuth") as chatgpt, patch.object(bootstrap, "ClaudeSubscriptionAuth") as claude:
+            self.chat.handle("Disconnect current service.")
+        chatgpt.assert_not_called()
+        claude.assert_not_called()
+        self.assertIsNone(self.chat.selected)
+        self.assertIsNone(bootstrap.load_selected_provider(bootstrap.PROVIDER_FILE))
+        self.assertEqual(self.chat.credentials.environment({})["OPENAI_API_KEY"], "sk-fixture-key-retained-after-disconnect")
+        self.assert_setup_choices(self.events[-1]["text"])
+
+    def test_signing_out_an_inactive_subscription_preserves_explicit_api_mode(self):
+        original = self.chat.provider
+        original.name = "openai"
+        self.chat.selected = "openai"
+        bootstrap.save_selected_provider(bootstrap.PROVIDER_FILE, "openai")
+        with patch.object(bootstrap, "ChatGPTAuth") as auth:
+            auth.return_value.logout.return_value = "Signed out of ChatGPT."
+            self.chat.handle("Log out of my ChatGPT account.")
+        auth.return_value.logout.assert_called_once()
+        self.assertIs(self.chat.provider, original)
+        self.assertEqual(self.chat.selected, "openai")
+        self.assertEqual(bootstrap.load_selected_provider(bootstrap.PROVIDER_FILE), "openai")
+
+    def test_external_logout_error_clears_stale_provider_and_returns_all_choices(self):
+        self.chat.selected = "chatgpt"
+        bootstrap.save_selected_provider(bootstrap.PROVIDER_FILE, "chatgpt")
+        with patch.object(bootstrap, "provider_available", return_value=False):
+            self.chat.report_error(bootstrap.ChatGPTError("ChatGPT is not signed in. " + bootstrap.LOGIN_HELP))
+        self.assertIsNone(self.chat.provider)
+        self.assertIsNone(self.chat.selected)
+        self.assertIsNone(bootstrap.load_selected_provider(bootstrap.PROVIDER_FILE))
+        self.assert_setup_choices(self.events[-1]["text"])
+        self.assertEqual(self.events[-1]["kind"], "setup")
+
+    def test_temporary_request_error_preserves_connection_and_authentication(self):
+        original = self.chat.provider
+        self.chat.selected = "chatgpt"
+        with patch.object(bootstrap, "provider_available") as available:
+            self.chat.report_error(bootstrap.ChatGPTError("Connection interrupted. Try again later."))
+        available.assert_not_called()
+        self.assertIs(self.chat.provider, original)
+        self.assertEqual(self.chat.selected, "chatgpt")
+
+    def test_logout_cancels_pending_chatgpt_signin_and_ignores_late_completion(self):
+        link_ready = threading.Event()
+        def login(**options):
+            options["notify"]("Continue with ChatGPT\nhttps://auth.openai.com/fixture")
+            link_ready.set()
+            options["cancel_event"].wait(timeout=3)
+            options["notify"]("Continue with ChatGPT\nhttps://auth.openai.com/late")
+        with patch.object(bootstrap, "ChatGPTAuth") as auth, patch.object(self.chat, "select_provider") as select:
+            auth.return_value.login.side_effect = login
+            auth.return_value.logout.return_value = "Signed out of ChatGPT."
+            self.chat.connect_subscription()
+            self.assertTrue(link_ready.wait(timeout=2))
+            thread = self.chat.login_thread
+            self.chat.handle("Log out.")
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+            select.assert_not_called()
+        self.assertIsNone(self.chat.selected)
+        self.assertIsNone(self.chat.login_url)
+        self.assertFalse(any(e.get("url") == "https://auth.openai.com/late" for e in self.events))
+        self.assert_setup_choices(self.events[-1]["text"])
+
+    def test_logout_cancels_pending_claude_signin_and_ignores_late_completion(self):
+        link_ready = threading.Event()
+        def login(**options):
+            options["notify"]("https://claude.com/cai/oauth/authorize?state=fixture")
+            link_ready.set()
+            options["cancel_event"].wait(timeout=3)
+            options["notify"]("https://claude.com/cai/oauth/authorize?state=late")
+        with patch.object(bootstrap, "ClaudeSubscriptionAuth") as auth, patch.object(self.chat, "select_provider") as select:
+            auth.return_value.login.side_effect = login
+            auth.return_value.logout.return_value = "Signed out of Claude."
+            self.chat.connect_claude_subscription()
+            self.assertTrue(link_ready.wait(timeout=2))
+            thread = self.chat.claude_login_thread
+            self.chat.handle("Sign out.")
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+            select.assert_not_called()
+            auth.return_value.cancel_login.assert_called_once()
+        self.assertIsNone(self.chat.selected)
+        self.assertIsNone(self.chat.claude_login_url)
+        self.assertFalse(any("late" in e.get("url", "") for e in self.events))
+        self.assert_setup_choices(self.events[-1]["text"])
 
 
 if __name__ == "__main__":

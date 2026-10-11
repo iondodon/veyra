@@ -15,10 +15,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "supervisor"))
 from api_credentials import CredentialError, CredentialStore, KEY_NAMES
 from providers import (
     PROVIDER_NAMES, ProviderConfigError, api_key_env_var, create_provider, provider_available,
-    load_selected_provider, parse_provider_choice, save_selected_provider,
+    clear_selected_provider, load_selected_provider, parse_provider_choice, save_selected_provider,
 )
 from chatgpt_auth import ChatGPTAuth, ChatGPTError, LOGIN_HELP
-from claude_subscription import ClaudeSubscriptionAuth
+from claude_subscription import ClaudeSubscriptionAuth, LOGIN_HELP as CLAUDE_LOGIN_HELP
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -58,7 +58,14 @@ INTRO = (
     "in the private API key form, then choose that API.\n\n"
     "I'll choose the model for your selected service and tell you its name. "
     "Your sign-ins, API keys, and service choice are saved for future starts. "
+    "You can also choose a service or add keys in Settings. "
     "I'll ask before running commands."
+)
+
+SETUP_HELP = (
+    "Choose how you'd like to connect in Settings: ChatGPT subscription, Claude subscription, "
+    "OpenAI API, or Anthropic API. For API access, add your key under Settings → API keys. "
+    "You can also use the sign-in and private API key buttons below."
 )
 
 
@@ -72,7 +79,7 @@ def send(text, *, role="assistant", kind="message", **fields):
 
 
 def chat_error(exc):
-    return (str(exc).replace(LOGIN_HELP, "Choose Continue with ChatGPT to sign in.")
+    return (str(exc).replace(LOGIN_HELP, SETUP_HELP).replace(CLAUDE_LOGIN_HELP, SETUP_HELP)
             .replace("Select /provider chatgpt again.", "Ask me to use your ChatGPT subscription again.")
             .replace("Run agent/START --chatgpt-models.", "Try connecting your ChatGPT account again."))
 
@@ -82,6 +89,12 @@ def setup_intent(text):
     value = re.sub(r"[.!?]+$", "", text.strip().lower()).strip()
     value = re.sub(r"\s+", " ", value)
     value = re.sub(r"^(?:please |i want to |i would like to |can you |could you )", "", value)
+    if value in ("log out", "logout", "log me out", "sign out", "sign me out", "disconnect", "disconnect current service"):
+        return "logout", None
+    logout = re.fullmatch(r"(?:log out|logout|log me out|sign out|sign me out) (?:of|from) "
+                          r"(?:my |the )?(chatgpt|claude|anthropic)(?: account| subscription)?", value)
+    if logout:
+        return "logout", "chatgpt" if logout[1] == "chatgpt" else "claude"
     if value in ("sign in", "sign me in"):
         return "subscriptions", None
     if value in ("sign in with chatgpt", "continue with chatgpt", "connect chatgpt",
@@ -142,8 +155,11 @@ class Conversation:
         self.selected = None
         self.active_api_key = None
         self.login_thread = None
+        self.login_cancel = None
         self.login_url = None
         self.claude_login_thread = None
+        self.claude_login_cancel = None
+        self.claude_login_auth = None
         self.claude_login_url = None
         self.reported_model = None
         self.lock = threading.RLock()
@@ -187,15 +203,63 @@ class Conversation:
 
     def provider_status(self):
         if self.provider is None:
-            if self.selected is None:
-                return "Choose Continue with ChatGPT, Continue with Claude, or the private API key form below to get started."
-            if self.selected == "claude":
-                return "Choose Continue with Claude to sign in with your Claude subscription, or select another service in Settings."
-            return ("Sign in with your ChatGPT or Claude subscription to get started, or add an API key with the private form. "
-                    "You can say ‘Use the OpenAI API’ or ‘Use the Anthropic API’ whenever you want to switch.")
+            return SETUP_HELP
         label = {"chatgpt": "your ChatGPT subscription", "claude": "your Claude subscription",
                  "openai": "the OpenAI API", "anthropic": "the Anthropic API"}
         return f"I'm using {label[self.provider.name]}. Model in use: {self.provider.model}."
+
+    def clear_connection(self):
+        self.selected = None
+        self.provider = None
+        self.active_api_key = None
+        self.reported_model = None
+        self.previous_response_id = None
+        self.pending = None
+        self.login_url = None
+        self.claude_login_url = None
+        emit("clear_approval")
+        self.configuration()
+        clear_selected_provider(PROVIDER_FILE)
+
+    def logout(self, choice=None):
+        current = self.selected or (self.provider.name if self.provider else None)
+        disconnect = choice is None or choice == current
+        target = choice or current
+        for service, cancelled in (("chatgpt", self.login_cancel), ("claude", self.claude_login_cancel)):
+            if cancelled and (choice is None or choice == service):
+                cancelled.set()
+        if self.claude_login_auth and (choice is None or choice == "claude"):
+            self.claude_login_auth.cancel_login()
+        if disconnect:
+            self.clear_connection()
+        try:
+            if target == "chatgpt":
+                message = ChatGPTAuth(os.environ.get("VEYRA_CHATGPT_AUTH_FILE")).logout()
+            elif target == "claude":
+                auth = self.claude_login_auth or ClaudeSubscriptionAuth(self.subscription_environment())
+                message = auth.logout()
+            else:
+                message = "Veyra is disconnected."
+        except (ChatGPTError, ProviderConfigError, OSError) as exc:
+            send(chat_error(exc), kind="error")
+            message = "Sign-out could not be fully confirmed."
+        send(message + "\n\n" + (SETUP_HELP if disconnect else self.provider_status()),
+             kind="setup" if disconnect else "message")
+
+    def report_error(self, exc):
+        with self.lock:
+            auth_help = LOGIN_HELP in str(exc) or CLAUDE_LOGIN_HELP in str(exc)
+            if auth_help and self.provider and self.provider.name in ("chatgpt", "claude"):
+                try:
+                    available = provider_available(self.provider.name, self.subscription_environment())
+                except (ProviderConfigError, OSError):
+                    available = False
+                if not available:
+                    name = "ChatGPT" if self.provider.name == "chatgpt" else "Claude"
+                    self.clear_connection()
+                    send(name + " is disconnected.\n\n" + SETUP_HELP, kind="setup")
+                    return
+            send(chat_error(exc), kind="error")
 
     def select_provider(self, choice):
         env = self.subscription_environment() if choice in ("chatgpt", "claude") else self.environment()
@@ -216,7 +280,7 @@ class Conversation:
         text = (f"Add your {label} API key with the private form below, then ask me to use the {label} API."
                 if label else "Choose OpenAI or Anthropic in the private API key form below. "
                 "OpenAI uses OPENAI_API_KEY; Anthropic uses ANTHROPIC_API_KEY.")
-        send(text, kind="key_request", provider=provider)
+        send(text + " You can also open this form from Settings → API keys.", kind="key_request", provider=provider)
 
     def sign_in_notice(self, message):
         if message.startswith("Continue with ChatGPT\n"):
@@ -238,22 +302,30 @@ class Conversation:
         self.pending = None
         emit("clear_approval")
         self.configuration()
-        if self.claude_login_thread and self.claude_login_thread.is_alive():
+        if (self.claude_login_thread and self.claude_login_thread.is_alive()
+                and not self.claude_login_cancel.is_set()):
             send("Continue with Claude using the sign-in link in this chat.")
             return
         send("Sign in with your Claude subscription using Continue with Claude. "
              "Complete sign-in on the computer running Veyra; your login will be saved for later starts.")
+        cancelled = threading.Event()
+        self.claude_login_cancel = cancelled
+        self.claude_login_auth = auth
 
         def sign_in_notice(url):
             with self.lock:
+                if cancelled.is_set():
+                    return
                 self.claude_login_url = url
                 if self.selected == "claude":
                     emit("sign_in", provider="claude", url=url)
 
         def finish():
             try:
-                auth.login(notify=sign_in_notice)
+                auth.login(notify=sign_in_notice, cancel_event=cancelled)
                 with self.lock:
+                    if cancelled.is_set():
+                        return
                     self.claude_login_url = None
                     if self.selected == "claude":
                         self.select_provider("claude")
@@ -262,12 +334,15 @@ class Conversation:
                         send("Your Claude subscription is connected. You can ask me to use it whenever you want.")
             except (ProviderConfigError, OSError) as exc:
                 with self.lock:
+                    if cancelled.is_set():
+                        return
                     self.claude_login_url = None
                     self.configuration()
                     send(chat_error(exc), kind="error")
             finally:
                 with self.lock:
-                    self.claude_login_thread = None
+                    if self.claude_login_cancel is cancelled:
+                        self.claude_login_thread = None
 
         self.claude_login_thread = threading.Thread(target=finish, daemon=True)
         self.claude_login_thread.start()
@@ -281,16 +356,26 @@ class Conversation:
         self.pending = None
         emit("clear_approval")
         self.configuration()
-        if self.login_thread and self.login_thread.is_alive():
+        if self.login_thread and self.login_thread.is_alive() and not self.login_cancel.is_set():
             send("Continue with ChatGPT using the sign-in link in this chat.")
             return
+
+        cancelled = threading.Event()
+        self.login_cancel = cancelled
+
+        def sign_in_notice(message):
+            with self.lock:
+                if not cancelled.is_set():
+                    self.sign_in_notice(message)
 
         def finish():
             try:
                 ChatGPTAuth(os.environ.get("VEYRA_CHATGPT_AUTH_FILE")).login(
-                    open_browser=False, notify=self.sign_in_notice,
+                    open_browser=False, notify=sign_in_notice, cancel_event=cancelled,
                 )
                 with self.lock:
+                    if cancelled.is_set():
+                        return
                     self.login_url = None
                     if self.selected == "chatgpt":
                         self.select_provider("chatgpt")
@@ -299,12 +384,15 @@ class Conversation:
                         send("Your ChatGPT subscription is connected. You can ask me to use it whenever you want.")
             except (ChatGPTError, ProviderConfigError, OSError) as exc:
                 with self.lock:
+                    if cancelled.is_set():
+                        return
                     self.login_url = None
                     self.configuration()
                     send(chat_error(exc), kind="error")
             finally:
                 with self.lock:
-                    self.login_thread = None
+                    if self.login_cancel is cancelled:
+                        self.login_thread = None
 
         self.login_thread = threading.Thread(target=finish, daemon=True)
         self.login_thread.start()
@@ -321,8 +409,11 @@ class Conversation:
         if approval in ("approve", "approve these commands", "deny", "deny these commands"):
             text = "/approve" if approval.startswith("approve") else "/deny"
         action, choice = setup_intent(text)
+        if action == "logout":
+            self.logout(choice)
+            return
         if action == "subscriptions":
-            send("Choose Continue with ChatGPT or Continue with Claude below to sign in with your subscription.", kind="setup")
+            send("Choose Continue with ChatGPT or Continue with Claude below, or choose a subscription in Settings.", kind="setup")
             return
         if action == "connect":
             if choice == "claude":
@@ -483,7 +574,7 @@ def main() -> int:
             message = json.loads(line)
             conversation.handle(message["text"], message.get("approval_id"))
         except (ChatGPTError, ProviderConfigError) as exc:
-            send(chat_error(exc), kind="error")
+            conversation.report_error(exc)
         except Exception as exc:
             send(f"Veyra couldn't complete that request: {exc}", role="system")
         finally:

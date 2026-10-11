@@ -91,6 +91,11 @@ def save_selected_provider(path, name: str) -> None:
     path.write_text(json.dumps({"provider": choice}), encoding="utf-8")
 
 
+def clear_selected_provider(path) -> None:
+    """Return to the unselected state without deleting saved credentials."""
+    Path(path).unlink(missing_ok=True)
+
+
 def create_provider(name: str, env=os.environ):
     """Build the explicitly named provider; there is no implicit default."""
     choice = parse_provider_choice(name)

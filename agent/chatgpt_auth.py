@@ -198,7 +198,11 @@ class ChatGPTAuth:
                     raise ChatGPTError("ChatGPT plan permission was removed. " + LOGIN_HELP)
             return profile["access_token"]
 
-    def login(self, *, new_account=False, client_id=None, open_browser=True, timeout=300, notify=print):
+    def login(self, *, new_account=False, client_id=None, open_browser=True, timeout=300, notify=print, cancel_event=None):
+        def check_cancelled():
+            if cancel_event is not None and cancel_event.is_set():
+                raise ChatGPTError("ChatGPT sign-in cancelled.")
+        check_cancelled()
         with self.locked():
             data = self._read()
             if "host_id" not in data:
@@ -251,13 +255,16 @@ class ChatGPTAuth:
                 params["prompt"] = "consent"
             # Omit ID-token hints so the printable link never contains a token.
             url = AUTHORIZE_URL + "?" + urlencode(params)
+            check_cancelled()
             notify("Continue with ChatGPT\n" + url)
             if open_browser:
                 webbrowser.open(url)
             server.timeout = 0.5
             deadline = time.monotonic() + timeout
             while not result and time.monotonic() < deadline:
+                check_cancelled()
                 server.handle_request()
+        check_cancelled()
         if not result:
             raise ChatGPTError("ChatGPT sign-in timed out. " + LOGIN_HELP)
         if result.get("error"):
@@ -269,6 +276,7 @@ class ChatGPTAuth:
             raise ChatGPTError("ChatGPT did not return an authorization code.")
         # Retain an issued registration even if its single-use code expires.
         with self.locked():
+            check_cancelled()
             data = self._read()
             data["profiles"].setdefault(issued, {"client_id": issued})
             data["login_client_id"] = issued
@@ -283,6 +291,7 @@ class ChatGPTAuth:
             raise ChatGPTError("A different ChatGPT account signed in. Use --new-account to add it.")
         saved = {"client_id": issued, **identity, **token_record(tokens)}
         with self.locked():
+            check_cancelled()
             data = self._read()
             data["profiles"][issued] = saved
             data["active_client_id"] = issued

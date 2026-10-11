@@ -13,6 +13,7 @@ import re
 import selectors
 import shutil
 import subprocess
+import threading
 import time
 from urllib.parse import urlsplit
 import uuid
@@ -58,6 +59,9 @@ class ClaudeSubscriptionAuth:
         self.env = {name: source[name] for name in allowed if name in source}
         self.env.update(CLAUDE_CONFIG_DIR=str(self.directory), CLAUDE_CODE_SAFE_MODE="1",
                         BROWSER="/bin/true", NO_COLOR="1", TERM="dumb", DISABLE_AUTOUPDATER="1")
+        self._login_lock = threading.RLock()
+        self._login_process = None
+        self._login_cancelled = threading.Event()
 
     def command(self, *args):
         return [self.binary, "--safe-mode", "--setting-sources", "", *args]
@@ -77,18 +81,48 @@ class ClaudeSubscriptionAuth:
         if not self.signed_in():
             raise ProviderConfigError(LOGIN_HELP)
 
-    def login(self, notify, timeout=300):
+    def cancel_login(self):
+        with self._login_lock:
+            self._login_cancelled.set()
+            process = self._login_process
+            if process is not None and process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+
+    def logout(self):
+        self.cancel_login()
+        try:
+            result = subprocess.run(self.command("auth", "logout"), env=self.env, cwd=self.directory,
+                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15, umask=0o077)
+        except (OSError, subprocess.TimeoutExpired):
+            raise ProviderConfigError("Claude sign-out couldn't finish. Try again from Settings.") from None
+        if result.returncode != 0:
+            raise ProviderConfigError("Claude sign-out couldn't finish. Try again from Settings.")
+        return "Signed out of Claude."
+
+    def login(self, notify, timeout=300, cancel_event=None):
+        def check_cancelled():
+            if self._login_cancelled.is_set() or (cancel_event is not None and cancel_event.is_set()):
+                raise ProviderConfigError("Claude sign-in cancelled.")
         process = None
         try:
-            process = subprocess.Popen(self.command("auth", "login", "--claudeai"),
-                env=self.env, cwd=self.directory, stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, umask=0o077)
+            with self._login_lock:
+                check_cancelled()
+                process = subprocess.Popen(self.command("auth", "login", "--claudeai"),
+                    env=self.env, cwd=self.directory, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, umask=0o077)
+                self._login_process = process
             deadline = time.monotonic() + timeout
             pending = ""
             announced = set()
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ)
                 while time.monotonic() < deadline:
+                    check_cancelled()
                     if not selector.select(timeout=min(.5, max(0, deadline - time.monotonic()))):
                         continue
                     chunk = os.read(process.stdout.fileno(), 4096)
@@ -104,11 +138,14 @@ class ClaudeSubscriptionAuth:
                                 and parsed.path in ("/cai/oauth/authorize", "/oauth/authorize")
                                 and not parsed.username and not parsed.password and url not in announced):
                             announced.add(url)
+                            check_cancelled()
                             notify(url)
+            check_cancelled()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise ProviderConfigError("Claude sign-in timed out. " + LOGIN_HELP)
             process.wait(timeout=remaining)
+            check_cancelled()
             if process.returncode != 0 or not self.signed_in():
                 raise ProviderConfigError("Claude sign-in wasn't completed. " + LOGIN_HELP)
         except (OSError, subprocess.TimeoutExpired):
@@ -123,6 +160,9 @@ class ClaudeSubscriptionAuth:
                         process.kill()
                         process.wait()
                 process.stdout.close()
+                with self._login_lock:
+                    if self._login_process is process:
+                        self._login_process = None
 
 
 class ClaudeSubscriptionProvider:

@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -135,6 +136,47 @@ class ClaudeSubscriptionTests(unittest.TestCase):
         self.auth.command = lambda *args: [sys.executable, str(script)]
         with self.assertRaisesRegex(ProviderConfigError, "timed out"):
             self.auth.login(notify=lambda _: None, timeout=.1)
+
+    def test_logout_uses_official_client_with_isolated_credentials(self):
+        with patch("claude_subscription.subprocess.run", return_value=SimpleNamespace(returncode=0)) as run:
+            self.assertEqual(self.auth.logout(), "Signed out of Claude.")
+        self.assertEqual(run.call_args.args[0], self.auth.command("auth", "logout"))
+        self.assertEqual(run.call_args.kwargs["env"]["CLAUDE_CONFIG_DIR"], str(self.auth.directory))
+        self.assertEqual(run.call_args.kwargs["umask"], 0o077)
+
+    def test_failed_logout_keeps_cli_diagnostics_private(self):
+        with patch("claude_subscription.subprocess.run", return_value=SimpleNamespace(
+                returncode=1, stdout="private credential diagnostics", stderr="private token")):
+            with self.assertRaisesRegex(ProviderConfigError, "Settings") as error:
+                self.auth.logout()
+        self.assertNotIn("private", str(error.exception))
+
+    def test_cancel_login_stops_child_before_returning(self):
+        script = self.root / "fixture-cancel.py"
+        script.write_text("import time\n"
+                          "print('https://claude.com/cai/oauth/authorize?state=fixture', flush=True)\n"
+                          "time.sleep(60)\n")
+        self.auth.command = lambda *args: [sys.executable, str(script)]
+        ready = threading.Event()
+        errors = []
+        def login():
+            try:
+                self.auth.login(notify=lambda _: ready.set(), timeout=5)
+            except ProviderConfigError as exc:
+                errors.append(str(exc))
+        thread = threading.Thread(target=login)
+        thread.start()
+        try:
+            self.assertTrue(ready.wait(timeout=2))
+            process = self.auth._login_process
+            self.auth.cancel_login()
+            self.assertIsNotNone(process.poll())
+        finally:
+            self.auth.cancel_login()
+            thread.join(timeout=2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, ["Claude sign-in cancelled."])
+        self.assertIsNone(self.auth._login_process)
 
 
 if __name__ == "__main__":

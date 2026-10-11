@@ -228,6 +228,32 @@ class AuthTests(unittest.TestCase):
         self.assertTrue(any("Connected:" in n for n in notices))
         self.assertNotIn("access-secret", "\n".join(notices))
 
+    def test_cancelled_login_never_exchanges_or_saves_tokens(self):
+        cancelled = threading.Event()
+        def notify(_):
+            cancelled.set()
+        with patch.object(auth, "http_json") as network:
+            with self.assertRaisesRegex(auth.ChatGPTError, "cancelled"):
+                self.store.login(open_browser=False, notify=notify, cancel_event=cancelled, timeout=3)
+        network.assert_not_called()
+        with self.assertRaisesRegex(auth.ChatGPTError, "not signed in"):
+            self.store.account()
+
+    def test_logout_during_code_exchange_prevents_late_credentials_from_being_saved(self):
+        browser, _ = self.browser()
+        cancelled = threading.Event()
+        identity = {"issuer": auth.ISSUER, "subject": "u1", "email": "owner@example.test"}
+        def validate(*_):
+            cancelled.set()
+            return identity
+        with patch.object(auth.webbrowser, "open", side_effect=browser), \
+             patch.object(auth, "http_json", return_value=token_set()), \
+             patch.object(auth, "validate_identity", side_effect=validate):
+            with self.assertRaisesRegex(auth.ChatGPTError, "cancelled"):
+                self.store.login(notify=lambda _: None, cancel_event=cancelled, timeout=3)
+        with self.assertRaisesRegex(auth.ChatGPTError, "not signed in"):
+            self.store.account()
+
     def test_returning_login_reuses_host_client_and_does_not_print_tokens(self):
         self.seed()
         browser, captured = self.browser(lambda p: [{"state": p["state"], "code": "code"}])
