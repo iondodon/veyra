@@ -73,6 +73,8 @@ Use natural language to manage setup, or choose a service under **Settings**:
 | --- | --- |
 | “Sign in with ChatGPT” | Prepare a subscription sign-in link |
 | “Use my ChatGPT subscription” | Select subscription usage |
+| “Use my Claude subscription” | Select Claude subscription usage |
+| “Sign in with Claude” | Prepare a Claude subscription sign-in link |
 | “What model are you using?” | Show the current usage mode and model |
 | “Use the OpenAI API” | Select OpenAI API billing |
 | “Use the Anthropic API” | Select Anthropic API billing |
@@ -105,6 +107,37 @@ Optional account maintenance commands remain available for recovery:
 
 These explicit maintenance commands print their results to the terminal.
 Normal Veyra startup prints only the page address.
+
+### Use your Claude plan
+
+Choose **Settings → Use Claude subscription**, or say **“Use my Claude
+subscription”** (also **“Use my Anthropic subscription”**). Veyra prepares a
+**Continue with Claude** link in the chat. Open it on the computer running
+Veyra and finish signing in with your Claude subscription. Return to the
+chat when the browser says sign-in is complete. Veyra remembers the selected
+service and reuses the saved login after restarts and reboots.
+
+This integration uses the official [Claude Code CLI](https://code.claude.com/docs/en/headless).
+[Anthropic supports subscription usage through this client](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan).
+It requires Claude Code version 2.1.288 or newer, available from
+[Anthropic's installation guide](https://code.claude.com/docs/en/setup).
+Veyra finds `claude` on your PATH or at `~/.local/bin/claude`.
+
+Claude Code manages credentials and token refresh in Veyra's private
+`state/auth/claude/` directory, ignored by Git. This login is separate from
+other Claude Code installations. No subscription tokens are pasted into the
+chat or sent directly to Anthropic endpoints by Veyra. API keys and cloud
+billing configuration are excluded from the subscription client's environment;
+failed subscription requests never switch to API billing.
+
+Veyra presets the `sonnet` model alias, which Claude resolves for your account,
+and shows the resolved model name after the first reply. Advanced installations
+can set `CLAUDE_SUBSCRIPTION_MODEL` before startup. Claude Code's built-in tools,
+MCP servers and customizations are disabled for these requests. Commands are
+returned as proposals and go through Veyra's normal approval buttons.
+
+The CLI can be selected explicitly with `VEYRA_CLAUDE_BIN`; an independent
+credential directory can be selected with `VEYRA_CLAUDE_CONFIG_DIR`.
 
 ### API billing
 
@@ -151,7 +184,8 @@ veyra/
 │   ├── bootstrap.py
 │   ├── providers.py
 │   ├── chatgpt_auth.py
-│   └── chatgpt_provider.py
+│   ├── chatgpt_provider.py
+│   └── claude_subscription.py
 ├── supervisor/     # lifecycle boundary and local web chat
 │   ├── supervisor
 │   ├── web_chat.py

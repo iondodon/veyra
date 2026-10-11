@@ -42,16 +42,20 @@ function refreshControls() {
   document.querySelector("#password-reminder").hidden = !state.password_is_default;
   document.body.classList.toggle("password-required", Boolean(state.password_is_default));
   const configuration = state.configuration || {};
-  const label = {chatgpt: "ChatGPT subscription", openai: "OpenAI API", anthropic: "Anthropic API"}[configuration.provider] || "ChatGPT subscription";
+  const label = {chatgpt: "ChatGPT subscription", claude: "Claude subscription", openai: "OpenAI API", anthropic: "Anthropic API"}[configuration.provider] || "ChatGPT subscription";
   document.querySelector("#model-status").textContent = label + (configuration.model ? " · " + configuration.model : " · awaiting setup");
-  const needsSignIn = configuration.provider === "chatgpt" && !configuration.connected;
+  const needsSignIn = ["chatgpt", "claude"].includes(configuration.provider) && !configuration.connected;
+  const signInLabel = configuration.provider === "claude" ? "Continue with Claude" : "Continue with ChatGPT";
   document.querySelectorAll("[data-signin-link]").forEach(link => {
     link.hidden = !needsSignIn || !configuration.sign_in_url;
+    link.textContent = signInLabel + " ↗";
     if (configuration.sign_in_url) link.href = configuration.sign_in_url;
     else link.removeAttribute("href");
   });
   document.querySelectorAll("[data-signin-button]").forEach(button => {
     button.hidden = !needsSignIn || Boolean(configuration.sign_in_url);
+    button.textContent = signInLabel;
+    button.dataset.message = configuration.provider === "claude" ? "Sign in with Claude." : "Sign in with ChatGPT.";
   });
   document.querySelectorAll("[data-signin-help]").forEach(note => { note.hidden = !needsSignIn; });
 }

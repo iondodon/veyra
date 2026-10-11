@@ -211,6 +211,90 @@ class ConversationTests(unittest.TestCase):
         self.assertNotIn(key, str(self.events))
         self.assertIn("API key hidden", str(continuation))
 
+    def test_claude_and_anthropic_subscription_phrases_select_subscription(self):
+        for phrase in ("Use my Claude subscription.", "Use my Anthropic subscription.",
+                       "Please switch to Claude.", "I want to use the Anthropic plan."):
+            with patch.object(bootstrap, "provider_available", return_value=False), \
+                 patch.object(self.chat, "connect_claude_subscription") as connect, \
+                 patch.object(self.chat, "request_key") as keys:
+                self.chat.handle(phrase)
+            connect.assert_called_once()
+            keys.assert_not_called()
+        with patch.object(self.chat, "connect_claude_subscription") as connect:
+            self.chat.handle("Sign in with Claude.")
+        connect.assert_called_once()
+
+    def test_claude_signin_is_async_and_keeps_later_service_choice(self):
+        finish = threading.Event()
+        link_ready = threading.Event()
+        url = "https://claude.com/cai/oauth/authorize?state=fixture"
+        def login(**kwargs):
+            kwargs["notify"](url)
+            link_ready.set()
+            finish.wait(timeout=3)
+        with patch.object(bootstrap, "ClaudeSubscriptionAuth") as auth, \
+             patch.object(self.chat, "select_provider") as select:
+            auth.return_value.login.side_effect = login
+            try:
+                self.chat.handle("Sign in with Claude.")
+                self.assertTrue(link_ready.wait(timeout=2))
+                self.assertEqual(self.chat.selected, "claude")
+                self.assertTrue(self.chat.claude_login_thread.is_alive())
+                self.chat.selected = "openai"
+                self.chat.sign_in_notice("Continue with ChatGPT\nhttps://auth.openai.com/stale")
+                self.assertFalse(any(e.get("url") == "https://auth.openai.com/stale" for e in self.events))
+            finally:
+                thread = self.chat.claude_login_thread
+                finish.set()
+                if thread:
+                    thread.join(timeout=2)
+            select.assert_not_called()
+        self.assertEqual(self.chat.selected, "openai")
+        self.assertIsNone(self.chat.claude_login_url)
+        self.assertTrue(any(e.get("url") == url and e.get("provider") == "claude" for e in self.events))
+
+    def test_remembered_claude_subscription_reuses_signin_and_ignores_api_store(self):
+        bootstrap.save_selected_provider(bootstrap.PROVIDER_FILE, "claude")
+        claude = SimpleNamespace(name="claude", model="sonnet")
+        with patch.object(bootstrap, "create_provider", return_value=claude) as create, \
+             patch.object(self.chat, "environment", side_effect=AssertionError("API keys must not be read")), \
+             patch.object(self.chat, "connect_claude_subscription") as connect:
+            self.chat.start()
+        connect.assert_not_called()
+        self.assertEqual(create.call_args.args[0], "claude")
+        self.assertEqual(create.call_args.args[1]["VEYRA_CLAUDE_CONFIG_DIR"], str(bootstrap.STATE / "auth/claude"))
+        self.assertTrue(any("your Claude subscription" in e.get("text", "") for e in self.events))
+
+    def test_claude_shell_proposals_still_require_matching_approval(self):
+        self.chat.provider.name = "claude"
+        with patch.object(bootstrap, "run_local", return_value={"stdout": "hello", "stderr": "", "outcome": {"type": "exit", "exit_code": 0}}) as run:
+            approval = self.request_commands()
+            run.assert_not_called()
+            self.chat.handle("Approve these commands.", "old-id")
+            run.assert_not_called()
+            self.chat.handle("Approve these commands.", approval)
+            run.assert_called_once_with("printf hello")
+
+    def test_claude_signin_completion_selects_subscription_and_preset_model(self):
+        finish = threading.Event()
+        link_ready = threading.Event()
+        def login(**kwargs):
+            kwargs["notify"]("https://claude.com/cai/oauth/authorize?state=fixture")
+            link_ready.set()
+            finish.wait(timeout=3)
+        with patch.object(bootstrap, "ClaudeSubscriptionAuth") as auth, \
+             patch.object(self.chat, "select_provider") as select:
+            auth.return_value.login.side_effect = login
+            try:
+                self.chat.connect_claude_subscription()
+                self.assertTrue(link_ready.wait(timeout=2))
+            finally:
+                thread = self.chat.claude_login_thread
+                finish.set()
+                if thread:
+                    thread.join(timeout=2)
+            select.assert_called_once_with("claude")
+
 
 if __name__ == "__main__":
     unittest.main()

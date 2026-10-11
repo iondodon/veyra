@@ -166,7 +166,8 @@ class WebChat:
         elif kind == "configuration":
             self.configuration.update({field: event[field] for field in self.configuration if field in event})
         elif kind == "sign_in":
-            self.configuration["sign_in_url"] = event.get("url")
+            if event.get("provider", self.configuration["provider"]) == self.configuration["provider"]:
+                self.configuration["sign_in_url"] = event.get("url")
         elif kind == "approval":
             self.approval_id = event["approval_id"]
             self.publish(event["text"], role="assistant", kind="approval", approval_id=self.approval_id)

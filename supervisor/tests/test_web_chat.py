@@ -130,6 +130,16 @@ for line in sys.stdin:
         self.assertEqual([e["text"] for e in data["events"]], ["Something needs your attention"])
         self.assertEqual(self.chat.snapshot(data["cursor"])["events"], [])
 
+    def test_background_signin_links_do_not_replace_selected_service(self):
+        self.chat.agent_event({"type": "configuration", "provider": "claude", "connected": False})
+        self.chat.agent_event({"type": "sign_in", "provider": "chatgpt", "url": "https://auth.openai.com/old"})
+        self.assertIsNone(self.chat.configuration["sign_in_url"])
+        self.chat.agent_event({"type": "sign_in", "provider": "claude", "url": "https://claude.com/cai/oauth/authorize?state=fixture"})
+        self.assertTrue(self.chat.configuration["sign_in_url"].startswith("https://claude.com/"))
+        self.chat.agent_event({"type": "configuration", "provider": "openai", "sign_in_url": None})
+        self.chat.agent_event({"type": "sign_in", "provider": "claude", "url": "https://claude.com/stale"})
+        self.assertIsNone(self.chat.configuration["sign_in_url"])
+
     def test_invalid_messages_and_paths_are_rejected(self):
         for payload in ([], {"text": ""}, {"text": 7}, {"text": "a" * 20001}):
             self.assertEqual(self.request("POST", "/api/messages", payload)[0], 400)

@@ -18,6 +18,7 @@ from providers import (
     load_selected_provider, parse_provider_choice, save_selected_provider,
 )
 from chatgpt_auth import ChatGPTAuth, ChatGPTError, LOGIN_HELP
+from claude_subscription import ClaudeSubscriptionAuth
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -50,7 +51,7 @@ def load_instructions() -> str:
 
 
 INTRO = (
-    "I'm Veyra. You can use me with your ChatGPT subscription or an API. "
+    "I'm Veyra. You can use me with your ChatGPT subscription, your Claude subscription, or an API. "
     "Your ChatGPT subscription is the default; no API key is needed.\n\n"
     "If you prefer API billing, save the key for the service you choose:\n"
     "• OpenAI: OPENAI_API_KEY\n• Anthropic: ANTHROPIC_API_KEY\n\n"
@@ -82,6 +83,9 @@ def setup_intent(text):
     if value in ("sign in", "sign in with chatgpt", "continue with chatgpt", "connect chatgpt",
                  "connect my chatgpt account", "sign me in"):
         return "connect", None
+    if value in ("sign in with claude", "sign in with anthropic", "continue with claude", "connect claude",
+                 "connect my claude account", "connect my anthropic account"):
+        return "connect", "claude"
     if value in ("what model are you using", "which model are you using", "what model is in use",
                  "show model", "show settings", "what mode are you using"):
         return "status", None
@@ -94,6 +98,8 @@ def setup_intent(text):
         choice = match[1]
         if choice in ("subscription", "chatgpt", "chatgpt subscription", "chatgpt plan", "subscription mode"):
             return "provider", "chatgpt"
+        if choice in ("claude", "claude subscription", "claude plan", "anthropic subscription", "anthropic plan"):
+            return "provider", "claude"
         if choice in ("openai", "openai api", "anthropic", "anthropic api"):
             return "provider", choice.split()[0]
         if choice in ("api", "api mode"):
@@ -131,6 +137,9 @@ class Conversation:
         self.active_api_key = None
         self.login_thread = None
         self.login_url = None
+        self.claude_login_thread = None
+        self.claude_login_url = None
+        self.reported_model = None
         self.lock = threading.RLock()
 
     def start(self):
@@ -142,6 +151,11 @@ class Conversation:
             self.configuration()
             if self.selected == "chatgpt" and not provider_available("chatgpt", os.environ):
                 self.connect_subscription()
+            elif self.selected == "claude":
+                try:
+                    self.connect_claude_subscription()
+                except ProviderConfigError as error:
+                    send(chat_error(error), kind="error")
             else:
                 send(chat_error(exc), kind="error")
                 if self.selected in KEY_NAMES:
@@ -157,21 +171,27 @@ class Conversation:
     def configuration(self):
         emit("configuration", provider=self.selected or "chatgpt",
              model=self.provider.model if self.provider else None,
-             connected=self.provider is not None, sign_in_url=self.login_url)
+             connected=self.provider is not None,
+             sign_in_url=self.claude_login_url if self.selected == "claude" else
+             self.login_url if self.selected == "chatgpt" else None)
 
     def provider_status(self):
         if self.provider is None:
-            return ("Sign in with your ChatGPT subscription to get started, or add an API key with the private form. "
+            if self.selected == "claude":
+                return "Choose Continue with Claude to sign in with your Claude subscription, or select another service in Settings."
+            return ("Sign in with your ChatGPT or Claude subscription to get started, or add an API key with the private form. "
                     "You can say ‘Use the OpenAI API’ or ‘Use the Anthropic API’ whenever you want to switch.")
-        label = {"chatgpt": "your ChatGPT subscription", "openai": "the OpenAI API", "anthropic": "the Anthropic API"}
+        label = {"chatgpt": "your ChatGPT subscription", "claude": "your Claude subscription",
+                 "openai": "the OpenAI API", "anthropic": "the Anthropic API"}
         return f"I'm using {label[self.provider.name]}. Model in use: {self.provider.model}."
 
     def select_provider(self, choice):
-        env = dict(os.environ) if choice == "chatgpt" else self.environment()
+        env = self.subscription_environment() if choice in ("chatgpt", "claude") else self.environment()
         provider = create_provider(choice, env)
         save_selected_provider(PROVIDER_FILE, choice)
         self.selected = choice
         self.provider = provider
+        self.reported_model = provider.model
         self.active_api_key = env.get(api_key_env_var(choice))
         self.previous_response_id = None
         self.pending = None
@@ -189,7 +209,56 @@ class Conversation:
     def sign_in_notice(self, message):
         if message.startswith("Continue with ChatGPT\n"):
             self.login_url = message.split("\n", 1)[1]
-            emit("sign_in", url=self.login_url)
+            if self.selected == "chatgpt":
+                emit("sign_in", provider="chatgpt", url=self.login_url)
+
+    def subscription_environment(self):
+        env = dict(os.environ)
+        env.setdefault("VEYRA_CLAUDE_CONFIG_DIR", str(STATE / "auth/claude"))
+        return env
+
+    def connect_claude_subscription(self):
+        auth = ClaudeSubscriptionAuth(self.subscription_environment())
+        save_selected_provider(PROVIDER_FILE, "claude")
+        self.selected = "claude"
+        self.provider = None
+        self.previous_response_id = None
+        self.pending = None
+        emit("clear_approval")
+        self.configuration()
+        if self.claude_login_thread and self.claude_login_thread.is_alive():
+            send("Continue with Claude using the sign-in link in this chat.")
+            return
+        send("Sign in with your Claude subscription using Continue with Claude. "
+             "Complete sign-in on the computer running Veyra; your login will be saved for later starts.")
+
+        def sign_in_notice(url):
+            with self.lock:
+                self.claude_login_url = url
+                if self.selected == "claude":
+                    emit("sign_in", provider="claude", url=url)
+
+        def finish():
+            try:
+                auth.login(notify=sign_in_notice)
+                with self.lock:
+                    self.claude_login_url = None
+                    if self.selected == "claude":
+                        self.select_provider("claude")
+                    else:
+                        self.configuration()
+                        send("Your Claude subscription is connected. You can ask me to use it whenever you want.")
+            except (ProviderConfigError, OSError) as exc:
+                with self.lock:
+                    self.claude_login_url = None
+                    self.configuration()
+                    send(chat_error(exc), kind="error")
+            finally:
+                with self.lock:
+                    self.claude_login_thread = None
+
+        self.claude_login_thread = threading.Thread(target=finish, daemon=True)
+        self.claude_login_thread.start()
 
     def connect_subscription(self):
         # An explicit sign-in selects subscription usage, even before it finishes.
@@ -241,7 +310,10 @@ class Conversation:
             text = "/approve" if approval.startswith("approve") else "/deny"
         action, choice = setup_intent(text)
         if action == "connect":
-            self.connect_subscription()
+            if choice == "claude":
+                self.connect_claude_subscription()
+            else:
+                self.connect_subscription()
             return
         if action == "keys":
             self.request_key(choice)
@@ -252,6 +324,8 @@ class Conversation:
         if action == "provider":
             if choice == "chatgpt" and not provider_available("chatgpt", os.environ):
                 self.connect_subscription()
+            elif choice == "claude" and not provider_available("claude", self.subscription_environment()):
+                self.connect_claude_subscription()
             elif choice in KEY_NAMES and not self.environment().get(api_key_env_var(choice)):
                 self.request_key(choice)
             else:
@@ -266,7 +340,7 @@ class Conversation:
         if text.startswith("/provider "):
             choice = parse_provider_choice(text.split(maxsplit=1)[1])
             if choice is None:
-                send("You can use your ChatGPT subscription, the OpenAI API, or the Anthropic API.")
+                send("You can use your ChatGPT subscription, your Claude subscription, the OpenAI API, or the Anthropic API.")
             else:
                 self.select_provider(choice)
             return
@@ -332,6 +406,10 @@ class Conversation:
         self.show_response(response)
 
     def show_response(self, response):
+        if self.provider.name == "claude" and self.provider.model != self.reported_model:
+            self.reported_model = self.provider.model
+            self.configuration()
+            send(self.provider_status())
         calls = [item for item in response.output if getattr(item, "type", None) == "shell_call"]
         if response.output_text:
             send(response.output_text)
@@ -351,6 +429,7 @@ def self_test() -> int:
     required = [
         ROOT / "supervisor", ROOT / ".git", AGENT_DIR, STATE, WORKSPACE, PROMPT,
         AGENT_DIR / "providers.py", AGENT_DIR / "chatgpt_auth.py", AGENT_DIR / "chatgpt_provider.py",
+        AGENT_DIR / "claude_subscription.py",
         ROOT / "supervisor/api_credentials.py",
     ]
     missing = [str(p) for p in required if not p.exists()]

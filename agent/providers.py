@@ -1,4 +1,4 @@
-"""Model providers: ChatGPT plan, OpenAI API, and Anthropic API.
+"""Model providers: ChatGPT and Claude subscriptions, OpenAI and Anthropic APIs.
 
 bootstrap.py speaks one request shape, modeled on the OpenAI Responses API:
 
@@ -26,7 +26,8 @@ from pathlib import Path
 PROVIDER_OPENAI = "openai"
 PROVIDER_ANTHROPIC = "anthropic"
 PROVIDER_CHATGPT = "chatgpt"
-PROVIDER_NAMES = (PROVIDER_CHATGPT, PROVIDER_OPENAI, PROVIDER_ANTHROPIC)
+PROVIDER_CLAUDE = "claude"
+PROVIDER_NAMES = (PROVIDER_CHATGPT, PROVIDER_CLAUDE, PROVIDER_OPENAI, PROVIDER_ANTHROPIC)
 
 DEFAULT_OPENAI_MODEL = "gpt-5.6"
 DEFAULT_ANTHROPIC_MODEL = "claude-opus-5"
@@ -57,6 +58,9 @@ def api_key_env_var(name: str) -> str | None:
 
 
 def provider_available(name: str, env=os.environ) -> bool:
+    if name == PROVIDER_CLAUDE:
+        from claude_subscription import ClaudeSubscriptionAuth
+        return ClaudeSubscriptionAuth(env).signed_in()
     if name == PROVIDER_CHATGPT:
         from chatgpt_auth import ChatGPTAuth, ChatGPTError
         try:
@@ -92,8 +96,12 @@ def create_provider(name: str, env=os.environ):
     choice = parse_provider_choice(name)
     if choice is None:
         raise ProviderConfigError(
-            "Model provider must be 'chatgpt', 'openai', or 'anthropic'"
+            "Model provider must be 'chatgpt', 'claude', 'openai', or 'anthropic'"
         )
+    if choice == PROVIDER_CLAUDE:
+        from claude_subscription import ClaudeSubscriptionAuth, ClaudeSubscriptionProvider, DEFAULT_MODEL
+        return ClaudeSubscriptionProvider(auth=ClaudeSubscriptionAuth(env),
+                                          model=env.get("CLAUDE_SUBSCRIPTION_MODEL", DEFAULT_MODEL))
     if choice == PROVIDER_CHATGPT:
         from chatgpt_auth import ChatGPTAuth, ChatGPTError
         from chatgpt_provider import ChatGPTProvider
