@@ -64,9 +64,12 @@ or using a model. An explicit service choice is remembered across restarts.
 ### Use your ChatGPT plan
 
 Choose **Continue with ChatGPT** in the first message or **Settings → Use
-ChatGPT subscription**. Veyra prepares a sign-in link if needed. Open it on
-the computer running Veyra, authorize Veyra,
-and return to the chat. Sign-in can wait in the background while you choose
+ChatGPT subscription**. Clicking sign-in asks Veyra to open the browser on
+the computer running Veyra. Authorize Veyra there and return to the chat.
+Remote clients show a button to open or reopen that host browser; the manual
+sign-in link is shown only when opening Veyra locally. If the browser cannot
+be opened, the chat explains how to continue on the Veyra computer.
+Sign-in can wait in the background while you choose
 another usage mode. Later starts reuse the saved account.
 
 This explicitly uses your ChatGPT plan allowance and any credits you
@@ -129,8 +132,11 @@ Normal Veyra startup prints only the page address.
 Choose **Settings → Use Claude subscription**, or say **“Use my Claude
 subscription”** (also **“Use my Anthropic subscription”**). Veyra prepares a
 **Continue with Claude** link in the chat. Open it on the computer running
-Veyra and finish signing in with your Claude subscription. Return to the
-chat when the browser says sign-in is complete. Veyra remembers the selected
+Veyra and finish signing in with your Claude subscription. Clicking sign-in
+opens that computer's browser, including when you control Veyra from another
+device. Remote clients show a host-browser button; manual links are limited
+to localhost. Return to the chat when the browser says sign-in is complete.
+Veyra remembers the selected
 service and reuses the saved login after restarts and reboots.
 
 This integration uses the official [Claude Code CLI](https://code.claude.com/docs/en/headless).
@@ -202,6 +208,7 @@ veyra/
 │   ├── chatgpt_auth.py
 │   ├── chatgpt_provider.py
 │   ├── claude_subscription.py
+│   ├── host_browser.py
 │   ├── web_chat.py
 │   ├── chat.html
 │   ├── chat.css

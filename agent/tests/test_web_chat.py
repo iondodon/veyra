@@ -96,6 +96,25 @@ for line in sys.stdin:
         self.assertIsNone(configuration["sign_in_url"])
         self.assertFalse(configuration["connected"])
 
+    def test_signin_links_are_only_returned_to_local_clients_for_both_subscriptions(self):
+        credential = "Basic " + base64.b64encode(b"veyra:veyra").decode()
+        for service, url in (("chatgpt", "https://auth.openai.com/fixture"),
+                             ("claude", "https://claude.com/cai/oauth/authorize?state=fixture")):
+            with self.subTest(service=service):
+                self.chat.agent_event({"type": "configuration", "provider": service, "connected": False})
+                self.chat.agent_event({"type": "sign_in", "provider": service, "url": url})
+                status, body = self.request("GET", "/api/events")
+                local = json.loads(body)["status"]
+                self.assertTrue(local["local_client"])
+                self.assertEqual(local["configuration"]["sign_in_url"], url)
+                with patch.object(self.chat.server.RequestHandlerClass, "local_client", return_value=False):
+                    status, body = self.request("GET", "/api/events", headers={"Authorization": credential})
+                remote = json.loads(body)["status"]
+                self.assertEqual(status, 200)
+                self.assertFalse(remote["local_client"])
+                self.assertIsNone(remote["configuration"]["sign_in_url"])
+                self.assertEqual(self.chat.configuration["sign_in_url"], url)
+
     def test_foreign_origin_and_rebinding_host_cannot_submit(self):
         self.attach_agent()
         self.assertEqual(self.request("POST", "/api/messages", {"text": "/approve"},

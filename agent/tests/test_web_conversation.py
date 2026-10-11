@@ -24,6 +24,9 @@ class ConversationTests(unittest.TestCase):
         self.emitter = patch.object(bootstrap, "emit", side_effect=lambda event_type, **fields: self.events.append({"type": event_type, **fields}))
         self.emitter.start()
         self.addCleanup(self.emitter.stop)
+        browser = patch.object(bootstrap, "open_sign_in", return_value=True)
+        self.browser = browser.start()
+        self.addCleanup(browser.stop)
         self.chat = bootstrap.Conversation()
         self.chat.provider = Mock(name="provider")
         self.chat.provider.name = "chatgpt"
@@ -89,9 +92,72 @@ class ConversationTests(unittest.TestCase):
             auth.return_value.login.assert_called_once()
             options = auth.return_value.login.call_args.kwargs
             self.assertFalse(options["open_browser"])
+            self.browser.assert_called_once_with("https://auth.openai.com/fixture")
             self.assertIs(options["cancel_event"], self.chat.login_cancel)
             select.assert_called_once_with("chatgpt")
             self.assertTrue(any(event.get("url") == "https://auth.openai.com/fixture" for event in self.events))
+
+    def test_remembered_signins_wait_for_explicit_click_before_opening_host_browser(self):
+        for service, auth_name, connect_name, url in (
+                ("chatgpt", "ChatGPTAuth", "connect_subscription", "https://auth.openai.com/fixture"),
+                ("claude", "ClaudeSubscriptionAuth", "connect_claude_subscription", "https://claude.com/cai/oauth/authorize?state=fixture")):
+            with self.subTest(service=service):
+                self.chat = bootstrap.Conversation()
+                self.browser.reset_mock()
+                bootstrap.save_selected_provider(bootstrap.PROVIDER_FILE, service)
+                ready = threading.Event()
+                def login(**options):
+                    options["notify"](("Continue with ChatGPT\n" if service == "chatgpt" else "") + url)
+                    ready.set()
+                    options["cancel_event"].wait(timeout=3)
+                with patch.object(bootstrap, auth_name) as auth, \
+                     patch.object(bootstrap, "create_provider", side_effect=bootstrap.ProviderConfigError("not signed in")), \
+                     patch.object(bootstrap, "provider_available", return_value=False):
+                    auth.return_value.login.side_effect = login
+                    try:
+                        self.chat.start()
+                        self.assertTrue(ready.wait(timeout=2))
+                        self.browser.assert_not_called()
+                        getattr(self.chat, connect_name)()
+                        self.browser.assert_called_once_with(url)
+                    finally:
+                        cancelled = self.chat.login_cancel if service == "chatgpt" else self.chat.claude_login_cancel
+                        thread = self.chat.login_thread if service == "chatgpt" else self.chat.claude_login_thread
+                        cancelled.set()
+                        if thread:
+                            thread.join(timeout=2)
+
+    def test_click_before_signin_url_is_ready_opens_browser_when_preparation_finishes(self):
+        waiting, release, opened = threading.Event(), threading.Event(), threading.Event()
+        def login(**options):
+            waiting.set()
+            release.wait(timeout=3)
+            options["notify"]("Continue with ChatGPT\nhttps://auth.openai.com/fixture")
+            opened.set()
+            options["cancel_event"].wait(timeout=3)
+        with patch.object(bootstrap, "ChatGPTAuth") as auth:
+            auth.return_value.login.side_effect = login
+            try:
+                self.chat.connect_subscription(open_browser=False)
+                self.assertTrue(waiting.wait(timeout=2))
+                self.chat.connect_subscription()
+                self.browser.assert_not_called()
+                release.set()
+                self.assertTrue(opened.wait(timeout=2))
+                self.browser.assert_called_once_with("https://auth.openai.com/fixture")
+            finally:
+                self.chat.login_cancel.set()
+                release.set()
+                thread = self.chat.login_thread
+                if thread:
+                    thread.join(timeout=2)
+
+    def test_unavailable_host_browser_is_reported_without_exposing_signin_url(self):
+        self.browser.return_value = False
+        self.chat.open_subscription_browser("chatgpt", "https://auth.openai.com/fixture")
+        self.assertEqual(self.events[-1]["kind"], "error")
+        self.assertIn("computer running Veyra", self.events[-1]["text"])
+        self.assertNotIn("https://", self.events[-1]["text"])
 
     def test_provider_failures_do_not_change_billing_or_selection(self):
         original = self.chat.provider

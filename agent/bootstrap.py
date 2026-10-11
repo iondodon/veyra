@@ -19,6 +19,7 @@ from providers import (
 )
 from chatgpt_auth import ChatGPTAuth, ChatGPTError, LOGIN_HELP
 from claude_subscription import ClaudeSubscriptionAuth, LOGIN_HELP as CLAUDE_LOGIN_HELP
+from host_browser import open_sign_in
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -162,10 +163,12 @@ class Conversation:
         self.login_thread = None
         self.login_cancel = None
         self.login_url = None
+        self.login_open_browser = False
         self.claude_login_thread = None
         self.claude_login_cancel = None
         self.claude_login_auth = None
         self.claude_login_url = None
+        self.claude_login_open_browser = False
         self.reported_model = None
         self.lock = threading.RLock()
 
@@ -181,10 +184,10 @@ class Conversation:
         except ProviderConfigError as exc:
             self.configuration()
             if self.selected == "chatgpt" and not provider_available("chatgpt", os.environ):
-                self.connect_subscription()
+                self.connect_subscription(open_browser=False)
             elif self.selected == "claude":
                 try:
-                    self.connect_claude_subscription()
+                    self.connect_claude_subscription(open_browser=False)
                 except ProviderConfigError as error:
                     send(chat_error(error), kind="error")
             else:
@@ -222,6 +225,8 @@ class Conversation:
         self.pending = None
         self.login_url = None
         self.claude_login_url = None
+        self.login_open_browser = False
+        self.claude_login_open_browser = False
         emit("clear_approval")
         self.configuration()
         clear_selected_provider(PROVIDER_FILE)
@@ -298,7 +303,15 @@ class Conversation:
         env.setdefault("VEYRA_CLAUDE_CONFIG_DIR", str(STATE / "auth/claude"))
         return env
 
-    def connect_claude_subscription(self):
+    def open_subscription_browser(self, service, url):
+        name = "ChatGPT" if service == "chatgpt" else "Claude"
+        if open_sign_in(url):
+            send(f"I opened {name} sign-in in a browser on the computer running Veyra. Finish signing in there.")
+        else:
+            send(f"I couldn't open a browser on the computer running Veyra. "
+                 f"Open Veyra on that computer and use its {name} sign-in link.", kind="error")
+
+    def connect_claude_subscription(self, *, open_browser=True):
         auth = ClaudeSubscriptionAuth(self.subscription_environment())
         save_selected_provider(PROVIDER_FILE, "claude")
         self.selected = "claude"
@@ -309,10 +322,15 @@ class Conversation:
         self.configuration()
         if (self.claude_login_thread and self.claude_login_thread.is_alive()
                 and not self.claude_login_cancel.is_set()):
-            send("Continue with Claude using the sign-in link in this chat.")
+            self.claude_login_open_browser = self.claude_login_open_browser or open_browser
+            if open_browser and self.claude_login_url:
+                self.open_subscription_browser("claude", self.claude_login_url)
+            else:
+                send("Claude sign-in is being prepared on the computer running Veyra.")
             return
-        send("Sign in with your Claude subscription using Continue with Claude. "
-             "Complete sign-in on the computer running Veyra; your login will be saved for later starts.")
+        self.claude_login_open_browser = open_browser
+        send("Continue with Claude to open sign-in on the computer running Veyra. "
+             "Your login will be saved for later starts.")
         cancelled = threading.Event()
         self.claude_login_cancel = cancelled
         self.claude_login_auth = auth
@@ -324,6 +342,8 @@ class Conversation:
                 self.claude_login_url = url
                 if self.selected == "claude":
                     emit("sign_in", provider="claude", url=url)
+                    if self.claude_login_open_browser:
+                        self.open_subscription_browser("claude", url)
 
         def finish():
             try:
@@ -352,7 +372,7 @@ class Conversation:
         self.claude_login_thread = threading.Thread(target=finish, daemon=True)
         self.claude_login_thread.start()
 
-    def connect_subscription(self):
+    def connect_subscription(self, *, open_browser=True):
         # An explicit sign-in selects subscription usage, even before it finishes.
         save_selected_provider(PROVIDER_FILE, "chatgpt")
         self.selected = "chatgpt"
@@ -362,9 +382,14 @@ class Conversation:
         emit("clear_approval")
         self.configuration()
         if self.login_thread and self.login_thread.is_alive() and not self.login_cancel.is_set():
-            send("Continue with ChatGPT using the sign-in link in this chat.")
+            self.login_open_browser = self.login_open_browser or open_browser
+            if open_browser and self.login_url:
+                self.open_subscription_browser("chatgpt", self.login_url)
+            else:
+                send("ChatGPT sign-in is being prepared on the computer running Veyra.")
             return
 
+        self.login_open_browser = open_browser
         cancelled = threading.Event()
         self.login_cancel = cancelled
 
@@ -372,6 +397,9 @@ class Conversation:
             with self.lock:
                 if not cancelled.is_set():
                     self.sign_in_notice(message)
+                    if (message.startswith("Continue with ChatGPT\n") and self.selected == "chatgpt"
+                            and self.login_open_browser):
+                        self.open_subscription_browser("chatgpt", self.login_url)
 
         def finish():
             try:
@@ -542,6 +570,7 @@ def self_test() -> int:
         AGENT_DIR / "providers.py", AGENT_DIR / "chatgpt_auth.py", AGENT_DIR / "chatgpt_provider.py",
         AGENT_DIR / "claude_subscription.py",
         AGENT_DIR / "web_chat.py", AGENT_DIR / "chat.html", AGENT_DIR / "chat.css", AGENT_DIR / "chat.js",
+        AGENT_DIR / "host_browser.py",
         ROOT / "supervisor/api_credentials.py",
     ]
     missing = [str(p) for p in required if not p.exists()]

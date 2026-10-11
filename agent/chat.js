@@ -48,7 +48,7 @@ function refreshControls() {
   const needsSignIn = ["chatgpt", "claude"].includes(configuration.provider) && !configuration.connected;
   const signInLabel = configuration.provider === "claude" ? "Continue with Claude" : "Continue with ChatGPT";
   document.querySelectorAll("[data-signin-link]").forEach(link => {
-    link.hidden = !needsSignIn || !configuration.sign_in_url;
+    link.hidden = !state.local_client || !needsSignIn || !configuration.sign_in_url;
     link.textContent = signInLabel + " ↗";
     if (configuration.sign_in_url) link.href = configuration.sign_in_url;
     else link.removeAttribute("href");
@@ -57,7 +57,8 @@ function refreshControls() {
     const provider = button.dataset.subscriptionChoice;
     const name = provider === "claude" ? "Claude" : "ChatGPT";
     const pending = provider === configuration.provider && needsSignIn;
-    button.hidden = pending && Boolean(configuration.sign_in_url);
+    button.hidden = state.local_client && pending && Boolean(configuration.sign_in_url);
+    button.textContent = pending && !state.local_client ? "Open " + name + " sign-in on Veyra’s computer" : "Continue with " + name;
     button.dataset.message = pending ? "Sign in with " + name + "." : "Use my " + name + " subscription.";
   });
   document.querySelectorAll("[data-signin-help]").forEach(note => { note.hidden = !needsSignIn; });
@@ -137,7 +138,7 @@ function appendMessage(event) {
       const note = document.createElement("p");
       note.className = "setup-help";
       note.dataset.signinHelp = "";
-      note.textContent = "Complete sign-in on the computer running Veyra.";
+      note.textContent = "Sign-in opens in a browser on the computer running Veyra. Finish signing in there.";
       article.append(note);
     }
   }

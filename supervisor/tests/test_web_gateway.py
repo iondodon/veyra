@@ -60,6 +60,8 @@ class GatewayTests(unittest.TestCase):
             status, body = self.request("GET", "/api/settings", headers={"Authorization": credential, "X-Veyra-Local": "1"})
             self.assertEqual(status, 200)
             self.assertFalse(json.loads(body)["can_save_keys"])
+            status, body = self.request("GET", "/api/events", headers={"Authorization": credential, "X-Veyra-Local": "1"})
+            self.assertFalse(json.loads(body)["status"]["local_client"])
             self.assertEqual(self.request("POST", "/api/keys", {"provider": "openai", "key": "sk-fixture-key"},
                              {"Authorization": credential, "X-Veyra-Local": "1"})[0], 403)
             self.assertFalse(self.chat.credentials.path.exists())

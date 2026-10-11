@@ -277,7 +277,11 @@ class WebChat:
                         after = max(0, int(parse_qs(parsed.query).get("after", ["0"])[0]))
                     except ValueError:
                         return self.respond(400, {"error": "Invalid message cursor."})
-                    return self.respond(200, chat.snapshot(after))
+                    data = chat.snapshot(after)
+                    data["status"]["local_client"] = self.local_client()
+                    if not self.local_client():
+                        data["status"]["configuration"]["sign_in_url"] = None
+                    return self.respond(200, data)
                 if parsed.path == "/api/settings":
                     try:
                         return self.respond(200, chat.key_settings(self.local_client()))
