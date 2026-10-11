@@ -4,6 +4,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -76,6 +77,16 @@ class GitAgentTests(unittest.TestCase):
 
         supervisor.require_committed_agent(root)
         self.assertEqual(supervisor.validate_agent(root), root / "agent")
+
+    def test_commit_changed_during_self_test_is_not_activated(self):
+        root = self.make_repository()
+        revision = supervisor.current_revision(root)
+        def check(_agent, _revision):
+            subprocess.run(["git", "-C", str(root), "commit", "--allow-empty", "-qm", "new revision"], check=True)
+            return True
+        with patch.object(supervisor, "run_self_test", side_effect=check):
+            with self.assertRaisesRegex(supervisor.SupervisorError, "changed during"):
+                supervisor.prepare_checked_out_agent(root, revision)
 
     def test_dirty_agent_is_rejected(self):
         root = self.make_repository()

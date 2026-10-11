@@ -4,6 +4,7 @@
 
 import fcntl
 import os
+import secrets
 import signal
 import subprocess
 import sys
@@ -12,7 +13,8 @@ from pathlib import Path
 import traceback
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from web_chat import WebChat, WEB_URL
+from web_gateway import WebGateway, WEB_URL
+from recovery import RecoveryError
 
 
 POLL_INTERVAL_SECONDS = 0.25
@@ -159,8 +161,9 @@ def run_self_test(agent: Path, revision: str) -> bool:
         result = subprocess.run(
             [str(start), "--self-test"], cwd=agent, check=False,
             capture_output=True, text=True, encoding="utf-8", errors="backslashreplace",
+            timeout=120,
         )
-    except OSError as exc:
+    except (OSError, subprocess.TimeoutExpired) as exc:
         log(f"Veyra couldn't check its next version: {exc}", error=True)
         return False
 
@@ -177,12 +180,19 @@ def run_self_test(agent: Path, revision: str) -> bool:
 
 def start_agent(agent: Path, revision: str) -> subprocess.Popen:
     log(f"starting agent at {short_revision(revision)}")
-    return subprocess.Popen(
+    directory = agent.parent / "state/run"
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    directory.chmod(0o700)
+    socket_path = directory / "agent.sock"
+    socket_path.unlink(missing_ok=True)
+    token = secrets.token_urlsafe(32)
+    process = subprocess.Popen(
         [str(agent / "START")],
         cwd=agent,
         start_new_session=True,
-        env={**os.environ, "VEYRA_WEB_TRANSPORT": "1"},
-        stdin=subprocess.PIPE,
+        env={**os.environ, "VEYRA_WEB_TRANSPORT": "1", "VEYRA_AGENT_SOCKET": str(socket_path),
+             "VEYRA_AGENT_TOKEN": token},
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -190,6 +200,9 @@ def start_agent(agent: Path, revision: str) -> subprocess.Popen:
         errors="backslashreplace",
         bufsize=1,
     )
+    process.socket_path = socket_path
+    process.web_token = token
+    return process
 
 
 def stop_agent(process: subprocess.Popen) -> None:
@@ -228,13 +241,16 @@ def prepare_checked_out_agent(root: Path, revision: str) -> Path:
         raise SupervisorError(
             f"agent at {short_revision(revision)} failed its self-test"
         )
+    if current_revision(root) != revision:
+        raise SupervisorError("the checked-out commit changed during its startup check; retrying the new version")
+    require_committed_agent(root)
     return agent
 
 
 def main() -> int:
     global CHAT
     root = repository_root()
-    CHAT = WebChat(root)
+    CHAT = WebGateway(root)
     print(f"Open Veyra at {WEB_URL}", flush=True)
     try:
         lock = acquire_single_instance_lock(root)
@@ -262,17 +278,34 @@ def main() -> int:
 
     try:
         while not shutting_down:
+            job = CHAT.recovery.take_request()
+            if job:
+                CHAT.detach()
+                if process is not None:
+                    stop_agent(process)
+                process = None
+                active_revision = None
+                try:
+                    CHAT.recovery.execute(job)
+                    last_rejection = None
+                except (RecoveryError, OSError, subprocess.TimeoutExpired) as exc:
+                    log(f"Recovery couldn't finish: {exc}", error=True)
+                    last_rejection = (current_revision(root), tuple(agent_changes(root)))
+                finally:
+                    CHAT.recovery.busy = False
             try:
                 requested_revision = current_revision(root)
             except SupervisorError as exc:
                 log(f"Veyra couldn't read its current version: {exc}", error=True)
-                return 1
+                time.sleep(POLL_INTERVAL_SECONDS)
+                continue
 
             if process is None or requested_revision != active_revision:
                 # Retry a rejected candidate only when its commit or working tree changes.
                 # The web page remains available for recovery messages.
                 candidate_key = (requested_revision, tuple(agent_changes(root)))
                 if candidate_key != last_rejection:
+                    CHAT.recovery.busy = True
                     try:
                         candidate = prepare_checked_out_agent(root, requested_revision)
                     except SupervisorError as exc:
@@ -286,9 +319,20 @@ def main() -> int:
                         agent = candidate
                         active_revision = requested_revision
                         last_rejection = None
-                        process = start_agent(agent, active_revision)
-                        CHAT.attach(process)
+                        try:
+                            process = start_agent(agent, active_revision)
+                        except OSError as exc:
+                            log(f"Veyra couldn't launch its agent: {exc}", error=True)
+                            process = None
+                            active_revision = None
+                            last_rejection = candidate_key
+                            continue
+                        CHAT.attach(process, active_revision)
+                        CHAT.recovery.error = None
+                        CHAT.recovery.busy = False
                         continue
+                    finally:
+                        CHAT.recovery.busy = False
 
             if process is not None and process.poll() is not None:
                 code = process.returncode
@@ -310,9 +354,19 @@ def main() -> int:
                 time.sleep(RESTART_DELAY_SECONDS)
                 if shutting_down:
                     break
-                process = start_agent(agent, active_revision)
-                CHAT.attach(process)
+                try:
+                    process = start_agent(agent, active_revision)
+                except OSError as exc:
+                    log(f"Veyra couldn't relaunch its agent: {exc}", error=True)
+                    process = None
+                    active_revision = None
+                    last_rejection = (requested_revision, tuple(agent_changes(root)))
+                    continue
+                CHAT.attach(process, active_revision)
                 continue
+
+            if process is not None and CHAT.ready():
+                CHAT.recovery.mark_working(active_revision)
 
             time.sleep(POLL_INTERVAL_SECONDS)
     finally:

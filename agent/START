@@ -4,7 +4,7 @@ set -eu
 AGENT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 ROOT_DIR="$(CDPATH= cd -- "$AGENT_DIR/.." && pwd)"
 
-# Normal launches use the supervisor, which owns the quiet web interface.
+# Normal launches use the supervisor's stable web entry point.
 case "${1:-}" in
     --self-test|--chatgpt-*) ;;
     *)

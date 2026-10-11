@@ -45,7 +45,8 @@ restarts, and is never sent to the model or added to the conversation. Normal
 startup prints only the page address. Network access uses HTTP and is intended
 for your trusted private network.
 
-The page remains available while the agent starts or changes commits. Each
+The address remains available while the agent starts or changes commits. A
+small recovery page appears if the agent is unavailable. Each
 agent start opens a clean visible conversation with a plain-language setup
 message. Reloading the page keeps the current conversation. Earlier sessions
 remain saved under `state/chat/`; routine startup diagnostics are hidden from
@@ -194,44 +195,76 @@ conversation. Approvals apply to a specific request and cannot be replayed.
 
 ```text
 veyra/
-├── agent/          # model, instructions, and command execution
+├── agent/          # web chat, model, instructions, and command execution
 │   ├── START
 │   ├── bootstrap.py
 │   ├── providers.py
 │   ├── chatgpt_auth.py
 │   ├── chatgpt_provider.py
-│   └── claude_subscription.py
-├── supervisor/     # lifecycle boundary and local web chat
-│   ├── supervisor
+│   ├── claude_subscription.py
 │   ├── web_chat.py
-│   ├── api_credentials.py
 │   ├── chat.html
 │   ├── chat.css
 │   └── chat.js
+├── supervisor/     # lifecycle, authenticated gateway, and recovery
+│   ├── supervisor
+│   ├── web_gateway.py
+│   ├── api_credentials.py
+│   ├── recovery.py
+│   ├── recovery.html
+│   ├── recovery.css
+│   └── recovery.js
 ├── state/          # persistent local state, ignored by Git
 └── workspace/      # local development area, ignored by Git
 ```
 
-Only one supervisor may run per repository. It owns the web page and holds
-an exclusive lock under `state/`. It reads `HEAD`, requires a clean,
+Only one supervisor may run per repository. It owns the network listener on
+port 3000 and holds an exclusive lock under `state/`. It reads `HEAD`, requires a clean,
 Git-tracked `agent/`, runs `agent/START --self-test`, and starts that agent.
-Startup checks and child diagnostics are saved locally; routine output stays
-hidden in the chat, while errors that need attention are shown.
+Startup checks and child diagnostics are saved locally and available under
+**Recovery → View error details**. Routine output stays out of the terminal.
 
-The agent receives JSON lines on stdin containing `text` and an optional
-`approval_id`. Chat events on stdout start with `VEYRA_EVENT ` followed by
-JSON. Other child output is saved as hidden diagnostic messages. The transport is local
-and does not send chat messages to a third-party messaging service.
+The agent owns the chat page, chat API, conversation storage, provider setup,
+and approvals. Its web server listens on a private Unix socket under
+`state/run/`, with owner-only permissions and a per-start authentication token.
+The supervisor checks network authentication, host, and request origin before
+forwarding requests. It supplies the actual client's local/network status;
+network clients cannot use forwarding headers to bypass private API key entry.
+Only the supervisor listens on a network port.
 
 The supervisor watches `HEAD`. After a successor commit passes its self-test,
-it restarts the agent while keeping the web page available and opening a fresh
+it restarts the agent while keeping the address available and opening a fresh
 conversation for the new agent session.
-If a candidate fails, the current process keeps running and the chat reports
-the problem. Changes to the supervisor or page assets take effect when the
-supervisor is restarted.
+If a candidate fails, the current process keeps running and the recovery page
+reports the problem. Chat interface changes belong to the next agent version;
+supervisor and recovery interface changes require a supervisor restart.
 
-Recovery is ordinary Git: fix and commit the candidate, or check out a known
-working commit. The supervisor does not reset the worktree or rewrite history.
+### Recovery
+
+Open **Settings → Recovery**, or visit `http://COMPUTER_IP:3000/recovery`.
+The same password protects the chat and recovery page. When the agent cannot
+start, opening the main address displays recovery automatically. This page
+works without the agent or a model connection and offers:
+
+- **Retry startup:** stop the current agent, rerun its startup check, and start it.
+- **Use last working version:** preview and confirm restoring the last agent
+  that successfully served the chat. Recovery creates a new commit on your
+  current branch containing that agent code; existing history and changes
+  outside `agent/` are preserved. Commit or discard dirty agent files first.
+- **Discard uncommitted changes:** preview modified, staged, deleted, and new
+  agent files, acknowledge permanent loss, then discard those changes and
+  retry startup. Only previewed, non-ignored agent files are eligible for
+  deletion. Changes outside `agent/`, ignored files, chats, credentials,
+  saved service selection, and workspace files are preserved.
+- **View error details** and **Open chat** when the agent is ready.
+
+Destructive confirmations expire after two minutes, cannot be reused, and are
+rejected if the agent files, commit, or branch changed after the preview.
+The supervisor stops the agent and checks the preview again before applying
+the action. The last working version is saved in `state/evolution/`; diagnostics
+are saved in `state/evolution/supervisor.log`. You can also recover through Git
+and restart the service manually. If the supervisor itself is stopped or
+broken, use SSH or the server's service manager.
 
 ## Evolving Veyra
 

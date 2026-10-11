@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Veyra's minimal agent. The supervisor carries its conversation to the web."""
+"""Veyra's agent and private web chat, reached through the supervisor."""
 
 import json
 import os
@@ -30,6 +30,7 @@ PROVIDER_FILE = STATE / "memory" / "provider.json"
 EVENT_PREFIX = "VEYRA_EVENT "
 SHELL_TOOLS = [{"type": "shell", "environment": {"type": "local"}}]
 EMIT_LOCK = threading.Lock()
+WEB_CHAT = None
 
 
 def current_commit() -> str:
@@ -71,6 +72,10 @@ SETUP_HELP = (
 
 def emit(event_type, **fields):
     with EMIT_LOCK:
+        if WEB_CHAT is not None:
+            with WEB_CHAT.lock:
+                WEB_CHAT.agent_event({"type": event_type, **fields})
+            return
         print(EVENT_PREFIX + json.dumps({"type": event_type, **fields}, ensure_ascii=False), flush=True)
 
 
@@ -536,12 +541,14 @@ def self_test() -> int:
         ROOT / "supervisor", ROOT / ".git", AGENT_DIR, STATE, WORKSPACE, PROMPT,
         AGENT_DIR / "providers.py", AGENT_DIR / "chatgpt_auth.py", AGENT_DIR / "chatgpt_provider.py",
         AGENT_DIR / "claude_subscription.py",
+        AGENT_DIR / "web_chat.py", AGENT_DIR / "chat.html", AGENT_DIR / "chat.css", AGENT_DIR / "chat.js",
         ROOT / "supervisor/api_credentials.py",
     ]
     missing = [str(p) for p in required if not p.exists()]
     if missing:
         print(json.dumps({"ok": False, "missing": missing}))
         return 1
+    from web_chat import WebChat  # Check the private web server imports before activation.
     instructions = load_instructions()
     if "{{COMMIT_ID}}" in instructions or COMMIT_ID not in instructions:
         print(json.dumps({"ok": False, "error": "commit identity rendering failed"}))
@@ -559,6 +566,7 @@ def self_test() -> int:
 
 
 def main() -> int:
+    global WEB_CHAT
     if any(arg.startswith("--chatgpt-") for arg in sys.argv[1:]):
         from chatgpt_auth import main as auth_main
         return auth_main(sys.argv[1:])
@@ -567,9 +575,19 @@ def main() -> int:
     if os.environ.get("VEYRA_WEB_TRANSPORT") != "1":
         # Direct START also uses the same quiet web startup.
         os.execv(sys.executable, [sys.executable, str(ROOT / "supervisor/supervisor")])
+    if os.environ.get("VEYRA_AGENT_SOCKET"):
+        from web_chat import WebChat
+        WEB_CHAT = WebChat(ROOT)
+        WEB_CHAT.start(socket_path=os.environ["VEYRA_AGENT_SOCKET"], token=os.environ["VEYRA_AGENT_TOKEN"])
+        def incoming():
+            while True:
+                yield json.dumps(WEB_CHAT.inbox.get())
+        lines = incoming()
+    else:
+        lines = sys.stdin
     conversation = Conversation()
     conversation.start()
-    for line in sys.stdin:
+    for line in lines:
         try:
             message = json.loads(line)
             conversation.handle(message["text"], message.get("approval_id"))

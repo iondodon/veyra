@@ -5,12 +5,17 @@ from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ipaddress
 import json
+import os
 from pathlib import Path
+import queue
 import secrets
+import socketserver
 import sqlite3
 import threading
 from urllib.parse import parse_qs, urlsplit
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "supervisor"))
 from api_credentials import CredentialError, CredentialStore, KEY_NAMES
 
 
@@ -39,6 +44,7 @@ class WebChat:
         self.database.chmod(0o600)
         self.lock = threading.RLock()
         self.process = None
+        self.inbox = queue.Queue()
         self.ready = False
         self.busy = False
         self.approval_id = None
@@ -188,7 +194,7 @@ class WebChat:
         if self.credentials.contains_secret(text):
             return 400, {"error": "Use the private API key form to save keys securely.", "open_api_keys": True}
         with self.lock:
-            if not self.ready or self.process is None:
+            if not self.ready:
                 return 503, {"error": "Veyra is starting. Please wait a moment."}
             if self.busy:
                 return 409, {"error": "Veyra is still working on your last message."}
@@ -198,6 +204,9 @@ class WebChat:
                 return 409, {"error": "That command request is no longer active."}
             self.busy = True
             self.publish(text, role="user")
+            if self.process is None:
+                self.inbox.put({"text": text, "approval_id": approval_id})
+                return 202, {"ok": True}
             try:
                 self.process.stdin.write(json.dumps({"text": text, "approval_id": approval_id}) + "\n")
                 self.process.stdin.flush()
@@ -207,7 +216,7 @@ class WebChat:
                 return 503, {"error": "Veyra is restarting."}
             return 202, {"ok": True}
 
-    def start(self, port=WEB_PORT):
+    def start(self, port=WEB_PORT, *, socket_path=None, token=None):
         chat = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -219,6 +228,8 @@ class WebChat:
                 self.connection.settimeout(10)
 
             def allowed_host(self):
+                if socket_path:
+                    return bool(token) and secrets.compare_digest(self.headers.get("X-Veyra-Token", ""), token)
                 port = self.server.server_port
                 address = self.connection.getsockname()[0]
                 return self.headers.get("Host") in (
@@ -226,9 +237,13 @@ class WebChat:
                 )
 
             def local_client(self):
+                if socket_path:
+                    return self.headers.get("X-Veyra-Local") == "1"
                 return ipaddress.ip_address(self.client_address[0]).is_loopback
 
             def authenticated(self):
+                if socket_path:
+                    return True  # The authenticated supervisor supplies the client context.
                 if self.local_client():
                     return True
                 scheme, _, credentials = self.headers.get("Authorization", "").partition(" ")
@@ -255,6 +270,8 @@ class WebChat:
                 if not self.authenticated():
                     return self.respond(401, {"error": "Sign in with username veyra and your Veyra network password."})
                 parsed = urlsplit(self.path)
+                if parsed.path == "/_health":
+                    return self.respond(200, {"ready": chat.ready, "busy": chat.busy})
                 if parsed.path == "/api/events":
                     try:
                         after = max(0, int(parse_qs(parsed.query).get("after", ["0"])[0]))
@@ -306,9 +323,16 @@ class WebChat:
                 # Reloads may close sockets mid-response. Never write to the terminal.
                 pass
 
-        self.server = Server(("0.0.0.0", port), Handler)
+        if socket_path:
+            class UnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+                daemon_threads = True
+                handle_error = Server.handle_error
+            self.server = UnixServer(str(socket_path), Handler)
+            os.chmod(socket_path, 0o600)
+        else:
+            self.server = Server(("127.0.0.1", port), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
-        return self.server.server_port
+        return self.server.server_address if socket_path else self.server.server_port
 
     def close(self):
         if self.server:

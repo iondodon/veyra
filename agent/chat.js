@@ -150,6 +150,7 @@ async function loadEvents() {
     const follow = window.innerHeight + window.scrollY >= document.body.scrollHeight - 160;
     do {
       const response = await fetch("/api/events?after=" + cursor, {cache: "no-store", headers: requestHeaders()});
+      if (response.status === 503) { window.location.replace("/recovery"); return; }
       if (!response.ok) throw new Error("Connection unavailable");
       const data = await response.json();
       if (state.session_id && state.session_id !== data.status.session_id) {

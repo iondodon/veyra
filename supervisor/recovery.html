@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Veyra · Recovery</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/recovery.css">
+  <script src="/recovery.js" defer></script>
+</head>
+<body>
+  <section class="window" aria-label="Veyra recovery">
+    <header><span class="mark" aria-hidden="true">v</span><span class="brand">Veyra</span><span class="muted">Recovery</span></header>
+    <main>
+      <p id="agent-status" class="status" role="status">Checking agent…</p>
+      <h1 id="title">Veyra is starting</h1>
+      <p id="description" class="muted">This page stays available while the agent starts or restarts.</p>
+      <p id="error" class="warning" hidden></p>
+      <dl class="versions">
+        <div><dt>Current version</dt><dd><code id="revision">—</code></dd></div>
+        <div><dt>Last working version</dt><dd><code id="last-working">Not recorded yet</code></dd></div>
+      </dl>
+      <div class="actions">
+        <a id="open-chat" class="button primary" href="/" hidden>Open chat</a>
+        <button id="restore" type="button" disabled>Use last working version</button>
+        <button id="retry" type="button" disabled>Retry startup</button>
+      </div>
+      <div class="actions discard-row"><button id="discard" class="danger-text" type="button" disabled>Discard uncommitted changes</button></div>
+      <p id="change-summary" class="muted"></p>
+      <details><summary>View error details</summary><pre id="diagnostics">No diagnostics yet.</pre></details>
+      <p id="feedback" role="status"></p>
+    </main>
+    <footer>Protected by your Veyra password · Available without a model connection</footer>
+  </section>
+  <dialog id="confirmation" aria-labelledby="confirmation-title">
+    <form id="confirmation-form">
+      <h2 id="confirmation-title">Discard code changes?</h2>
+      <p id="confirmation-description"></p>
+      <p class="muted">Version <code id="confirmation-revision"></code></p>
+      <ul id="changes" aria-label="Affected agent files"></ul>
+      <p>Saved chats, passwords, API keys, sign-ins, and workspace files are kept.</p>
+      <p id="warning" class="warning"></p>
+      <label id="consent-label" class="consent"><input id="consent" type="checkbox"><span>I understand that these code changes will be permanently lost.</span></label>
+      <p id="confirmation-error" role="alert"></p>
+      <div class="actions">
+        <button id="confirm" class="danger" type="submit" disabled>Discard changes and retry</button>
+        <button id="cancel" type="button">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>
