@@ -2,6 +2,7 @@ from contextlib import ExitStack
 import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -220,12 +221,15 @@ class WebChatGPTTests(unittest.TestCase):
             executed.append(command)
             return {"stdout": "ok", "stderr": "", "outcome": {"type": "exit", "exit_code": 0}}
 
-        with patch.dict(bootstrap.os.environ, {"VEYRA_WEB_TRANSPORT": "1"}), \
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(bootstrap, "STATE", Path(directory) / "state"), \
+                patch.object(bootstrap, "PROVIDER_FILE", Path(directory) / "state/memory/provider.json"), \
+                patch.dict(bootstrap.os.environ, {"VEYRA_WEB_TRANSPORT": "1"}, clear=True), \
                 patch.object(bootstrap.sys, "argv", ["bootstrap.py"]), \
                 patch.object(bootstrap.sys, "stdin", incoming()), \
                 patch.object(bootstrap, "load_selected_provider", return_value=None), \
                 patch.object(bootstrap, "create_provider", return_value=provider), \
-                patch.object(bootstrap, "save_selected_provider"), \
+                patch.object(bootstrap, "provider_available", return_value=False), \
                 patch.object(bootstrap, "emit", side_effect=lambda event_type, **fields: events.append({"type": event_type, **fields})), \
                 patch.object(bootstrap, "run_local", side_effect=execute):
             self.assertEqual(bootstrap.main(), 0)
@@ -255,6 +259,16 @@ class WebChatGPTTests(unittest.TestCase):
         self.assertEqual(executed, [])
         self.assertIn("Settings → Usage", sent[-1])
         self.assertEqual(provider.create_response.call_count, 1)
+
+    def test_missing_login_returns_to_setup_and_clears_only_test_state(self):
+        provider = Mock(model="plan-model")
+        provider.name = "chatgpt"
+        provider.create_response.side_effect = ChatGPTError("ChatGPT is not signed in. " + bootstrap.LOGIN_HELP)
+        sent, executed = self.run_messages(["/provider chatgpt", "hello", "Hi"], provider)
+        self.assertEqual(executed, [])
+        self.assertEqual(provider.create_response.call_count, 1)
+        for choice in ("ChatGPT", "Claude", "OpenAI API", "Anthropic API", "Settings → API keys"):
+            self.assertIn(choice, sent[-1])
 
 
 if __name__ == "__main__":
