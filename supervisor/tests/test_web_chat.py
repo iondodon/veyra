@@ -138,12 +138,47 @@ for line in sys.stdin:
             self.assertEqual(self.request("POST", "/api/messages", {"text": "hello"},
                              {"Authorization": credential})[0], 202)
 
-    def test_network_password_is_stable_across_restarts_and_stays_out_of_chat(self):
+    def test_default_password_and_reminder_survive_restart(self):
         restarted = WebChat(self.root)
-        self.assertEqual(restarted.network_password, self.chat.network_password)
-        self.assertGreaterEqual(len(self.chat.network_password), 24)
+        self.assertEqual(self.chat.network_password, "veyra")
+        self.assertEqual(restarted.network_password, "veyra")
+        self.assertTrue(restarted.snapshot(0)["status"]["password_is_default"])
         self.assertNotIn(self.chat.network_password, json.dumps(self.chat.snapshot(0)))
         self.assertEqual(self.chat.database.stat().st_mode & 0o777, 0o600)
+
+    def test_password_update_requires_authentication_origin_and_current_password(self):
+        handler = self.chat.server.RequestHandlerClass
+        old = "Basic " + base64.b64encode(b"veyra:veyra").decode()
+        new_password = "changed-password-\u2713"
+        payload = {"current_password": "veyra", "new_password": new_password}
+        with patch.object(handler, "local_client", return_value=False):
+            self.assertEqual(self.request("POST", "/api/password", payload)[0], 401)
+            self.assertEqual(self.request("POST", "/api/password", payload,
+                             {"Authorization": old, "Origin": "https://attacker.example"})[0], 403)
+            self.assertEqual(self.request("POST", "/api/password", {**payload, "current_password": "wrong"},
+                             {"Authorization": old})[0], 403)
+            self.assertEqual(self.chat.network_password, "veyra")
+            self.assertEqual(self.request("POST", "/api/password", payload, {"Authorization": old})[0], 200)
+            self.assertEqual(self.request("GET", "/api/events", headers={"Authorization": old})[0], 401)
+            new = "Basic " + base64.b64encode(("veyra:" + new_password).encode()).decode()
+            status, data = self.request("GET", "/api/events", headers={"Authorization": new})
+            self.assertEqual(status, 200)
+            self.assertFalse(json.loads(data)["status"]["password_is_default"])
+            self.assertEqual(json.loads(data)["events"], [])
+            self.assertNotIn(new_password, data.decode())
+        restarted = WebChat(self.root)
+        self.assertEqual(restarted.network_password, new_password)
+        self.assertFalse(restarted.snapshot(0)["status"]["password_is_default"])
+
+    def test_local_password_update_also_checks_current_password_and_validates_input(self):
+        for payload in ([], {}, {"current_password": None, "new_password": "valid-password"},
+                        {"current_password": "veyra", "new_password": "short"},
+                        {"current_password": "veyra", "new_password": "a" * 257}):
+            self.assertEqual(self.request("POST", "/api/password", payload)[0], 400)
+        self.assertEqual(self.request("POST", "/api/password", {
+            "current_password": "wrong", "new_password": "valid-password",
+        })[0], 403)
+        self.assertEqual(self.chat.network_password, "veyra")
 
 
 if __name__ == "__main__":

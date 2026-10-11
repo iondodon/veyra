@@ -34,20 +34,16 @@ supervisor with Ctrl+C.
 
 On your private network, open `http://COMPUTER_IP:3000` (for example,
 `http://192.168.1.9:3000`). Veyra listens on IPv4 network interfaces and asks
-network clients to sign in with username `veyra` and a generated password.
+network clients to sign in with username `veyra` and default password `veyra`.
 Localhost access works directly. Complete ChatGPT sign-in on the computer
 running Veyra before using the chat from another device.
 
-The network password is stored privately in `state/chat/messages.sqlite3`.
-To retrieve it locally:
-
-```bash
-python3 -c "import sqlite3; print(sqlite3.connect('state/chat/messages.sqlite3').execute(\"SELECT value FROM settings WHERE name='network_password'\").fetchone()[0])"
-```
-
-This explicit maintenance command prints the password; normal startup still
-prints only the page address. Network access uses HTTP and is intended for
-your trusted private network.
+The page reminds you to update the default password. Click **Change password**
+in the reminder or under **More** and choose a password of at least 8 characters.
+Your password is stored privately in `state/chat/messages.sqlite3`, survives
+restarts, and is never sent to the model or added to the conversation. Normal
+startup prints only the page address. Network access uses HTTP and is intended
+for your trusted private network.
 
 The page remains available while the agent starts or changes commits.
 Conversation history is saved under `state/chat/` and survives reloads and

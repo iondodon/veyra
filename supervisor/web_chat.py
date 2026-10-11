@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlsplit
 EVENT_PREFIX = "VEYRA_EVENT "
 WEB_PORT = 3000
 WEB_URL = f"http://localhost:{WEB_PORT}"
+DEFAULT_PASSWORD = "veyra"
 ASSETS = Path(__file__).resolve().parent
 
 
@@ -28,7 +29,7 @@ class WebChat:
             connection.execute("CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, payload TEXT NOT NULL)")
             connection.execute("CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY, value TEXT NOT NULL)")
             connection.execute("INSERT OR IGNORE INTO settings(name, value) VALUES ('network_password', ?)",
-                               (secrets.token_urlsafe(18),))
+                               (DEFAULT_PASSWORD,))
             self.network_password = connection.execute(
                 "SELECT value FROM settings WHERE name = 'network_password'"
             ).fetchone()[0]
@@ -54,8 +55,28 @@ class WebChat:
             return {
                 "events": [{"id": row[0], **json.loads(row[1])} for row in rows],
                 "cursor": rows[-1][0] if rows else after, "has_more": len(rows) == 200,
-                "status": {"ready": self.ready, "busy": self.busy, "approval_id": self.approval_id},
+                "status": {"ready": self.ready, "busy": self.busy, "approval_id": self.approval_id,
+                           "password_is_default": self.network_password == DEFAULT_PASSWORD},
             }
+
+    def change_password(self, payload):
+        if not isinstance(payload, dict):
+            return 400, {"error": "Enter your current and new passwords."}
+        current = payload.get("current_password")
+        new = payload.get("new_password")
+        if not isinstance(current, str) or len(current) > 256:
+            return 400, {"error": "Enter your current password."}
+        if not isinstance(new, str) or not 8 <= len(new) <= 256:
+            return 400, {"error": "Choose a new password of 8–256 characters."}
+        with self.lock:
+            if not secrets.compare_digest(current.encode(), self.network_password.encode()):
+                return 403, {"error": "The current password is incorrect."}
+            if new == current:
+                return 400, {"error": "Choose a different password."}
+            with closing(sqlite3.connect(self.database, timeout=10)) as connection, connection:
+                connection.execute("UPDATE settings SET value = ? WHERE name = 'network_password'", (new,))
+            self.network_password = new
+        return 200, {"ok": True}
 
     def attach(self, process):
         with self.lock:
@@ -210,7 +231,7 @@ class WebChat:
                     return self.respond(403, {"error": "Send messages from the Veyra page."})
                 if not self.authenticated():
                     return self.respond(401, {"error": "Sign in with username veyra and your Veyra network password."})
-                if self.path != "/api/messages":
+                if self.path not in ("/api/messages", "/api/password"):
                     return self.respond(404, {"error": "Page not found."})
                 if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
                     return self.respond(415, {"error": "Send JSON."})
@@ -221,7 +242,8 @@ class WebChat:
                     payload = json.loads(self.rfile.read(length))
                 except (ValueError, UnicodeDecodeError):
                     return self.respond(400, {"error": "Invalid message."})
-                status, result = chat.submit(payload)
+                status, result = (chat.change_password(payload) if self.path == "/api/password"
+                                  else chat.submit(payload))
                 self.respond(status, result)
 
         class Server(ThreadingHTTPServer):

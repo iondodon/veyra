@@ -4,14 +4,25 @@ const input = document.querySelector("#message");
 const sendButton = document.querySelector("#send");
 const activity = document.querySelector("#activity");
 const connection = document.querySelector("#connection");
+const passwordDialog = document.querySelector("#password-dialog");
+const passwordForm = document.querySelector("#password-form");
+const passwordStatus = document.querySelector("#password-status");
 let cursor = 0;
 let state = {ready: false, busy: false, approval_id: null};
 let posting = false;
 let connected = false;
 let notice = "";
+let authorization = "";
+let passwordSaving = false;
+let pollComplete = Promise.resolve();
+
+function requestHeaders(json = false) {
+  return {...(json ? {"Content-Type": "application/json"} : {}),
+    ...(authorization ? {Authorization: authorization} : {})};
+}
 
 function refreshControls() {
-  const available = connected && state.ready && !state.busy && !posting;
+  const available = connected && state.ready && !state.busy && !posting && !passwordSaving;
   sendButton.disabled = !available || !input.value.trim();
   document.querySelectorAll("[data-command]").forEach(button => { button.disabled = !available; });
   document.querySelectorAll("[data-approval]").forEach(button => {
@@ -22,6 +33,8 @@ function refreshControls() {
     "Review the requested commands and approve or deny them." : "");
   connection.textContent = connected && state.ready ? "Connected" : connected ? "Starting" : "Reconnecting";
   connection.classList.toggle("online", connected && state.ready);
+  document.querySelector("#password-reminder").hidden = !state.password_is_default;
+  document.body.classList.toggle("password-required", Boolean(state.password_is_default));
 }
 
 function appendText(element, text) {
@@ -70,12 +83,12 @@ function appendMessage(event) {
   messages.append(article);
 }
 
-async function poll() {
+async function loadEvents() {
   try {
     let more;
     const follow = window.innerHeight + window.scrollY >= document.body.scrollHeight - 160;
     do {
-      const response = await fetch("/api/events?after=" + cursor, {cache: "no-store"});
+      const response = await fetch("/api/events?after=" + cursor, {cache: "no-store", headers: requestHeaders()});
       if (!response.ok) throw new Error("Connection unavailable");
       const data = await response.json();
       data.events.forEach(appendMessage);
@@ -87,17 +100,24 @@ async function poll() {
     if (follow) window.scrollTo(0, document.body.scrollHeight);
   } catch (_) { connected = false; }
   refreshControls();
+}
+
+async function poll() {
+  if (!passwordSaving) {
+    pollComplete = loadEvents();
+    await pollComplete;
+  }
   window.setTimeout(poll, 500);
 }
 
 async function submit(text, approvalId = null) {
-  if (posting || !connected || !state.ready || state.busy) return;
+  if (posting || !connected || !state.ready || state.busy || passwordSaving) return;
   posting = true;
   notice = "";
   refreshControls();
   try {
     const response = await fetch("/api/messages", {
-      method: "POST", headers: {"Content-Type": "application/json"},
+      method: "POST", headers: requestHeaders(true),
       body: JSON.stringify({text, approval_id: approvalId}),
     });
     const result = await response.json();
@@ -128,5 +148,54 @@ input.addEventListener("input", () => {
 });
 document.querySelectorAll("[data-command]").forEach(button => {
   button.addEventListener("click", () => submit(button.dataset.command));
+});
+document.querySelectorAll("[data-password-settings]").forEach(button => {
+  button.addEventListener("click", () => {
+    document.querySelectorAll("details").forEach(details => { details.open = false; });
+    passwordDialog.showModal();
+  });
+});
+document.querySelector("#password-cancel").addEventListener("click", () => passwordDialog.close());
+passwordDialog.addEventListener("cancel", event => { if (passwordSaving) event.preventDefault(); });
+passwordDialog.addEventListener("close", () => {
+  passwordForm.reset();
+  passwordStatus.textContent = "";
+});
+passwordForm.addEventListener("submit", async event => {
+  event.preventDefault();
+  if (passwordSaving) return;
+  const current = document.querySelector("#current-password").value;
+  const password = document.querySelector("#new-password").value;
+  if (password !== document.querySelector("#confirm-password").value) {
+    passwordStatus.textContent = "The new passwords do not match.";
+    return;
+  }
+  passwordSaving = true;
+  passwordStatus.textContent = "Saving…";
+  document.querySelector("#password-save").disabled = true;
+  document.querySelector("#password-cancel").disabled = true;
+  refreshControls();
+  try {
+    // Finish the current poll before changing the credentials it uses.
+    await pollComplete;
+    const response = await fetch("/api/password", {
+      method: "POST", headers: requestHeaders(true),
+      body: JSON.stringify({current_password: current, new_password: password}),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Could not update the password.");
+    // Keep this tab connected; browsers ask for the new password on the next sign-in.
+    // Credentials stay in memory and are never sent to the chat or saved in browser storage.
+    authorization = "Basic " + btoa(String.fromCharCode(...new TextEncoder().encode("veyra:" + password)));
+    state.password_is_default = false;
+    notice = "Password updated. Use your new password the next time you sign in.";
+    passwordDialog.close();
+  } catch (error) { passwordStatus.textContent = error.message; }
+  finally {
+    passwordSaving = false;
+    document.querySelector("#password-save").disabled = false;
+    document.querySelector("#password-cancel").disabled = false;
+    refreshControls();
+  }
 });
 poll();
