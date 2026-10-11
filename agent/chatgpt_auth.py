@@ -1,7 +1,7 @@
 """Sign in with ChatGPT for this local Veyra installation.
 
 Uses the documented public-client flow, never another application's tokens.
-Credentials live outside agent/ and are never sent to Telegram.
+Credentials live outside agent/ and are never sent into the conversation.
 """
 
 import argparse
@@ -198,7 +198,7 @@ class ChatGPTAuth:
                     raise ChatGPTError("ChatGPT plan permission was removed. " + LOGIN_HELP)
             return profile["access_token"]
 
-    def login(self, *, new_account=False, client_id=None, open_browser=True, timeout=300):
+    def login(self, *, new_account=False, client_id=None, open_browser=True, timeout=300, notify=print):
         with self.locked():
             data = self._read()
             if "host_id" not in data:
@@ -233,7 +233,7 @@ class ChatGPTAuth:
                 self.send_header("Content-Type", "text/plain; charset=utf-8")
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
-                self.wfile.write(b"Return to Veyra's terminal to finish sign-in." if valid else b"Invalid sign-in callback.")
+                self.wfile.write(b"Return to Veyra to finish sign-in." if valid else b"Invalid sign-in callback.")
                 if valid:
                     result.update({k: v[0] for k, v in query.items()})
 
@@ -251,7 +251,7 @@ class ChatGPTAuth:
                 params["prompt"] = "consent"
             # Omit ID-token hints so the printable link never contains a token.
             url = AUTHORIZE_URL + "?" + urlencode(params)
-            print("Continue with ChatGPT\n" + url, flush=True)
+            notify("Continue with ChatGPT\n" + url)
             if open_browser:
                 webbrowser.open(url)
             server.timeout = 0.5
@@ -287,9 +287,9 @@ class ChatGPTAuth:
             data["profiles"][issued] = saved
             data["active_client_id"] = issued
             self._write(data)
-        print(f"Connected: {identity['email'] or identity['subject']}")
-        print("ChatGPT plan usage is " + ("enabled." if DIRECT_SCOPE in saved["scopes"] else
-                                          "disabled. Run --chatgpt-login to enable it."))
+        notify(f"Connected: {identity['email'] or identity['subject']}")
+        notify("ChatGPT plan usage is " + ("enabled." if DIRECT_SCOPE in saved["scopes"] else
+                                          "disabled. Sign in again to enable it."))
 
     def status(self):
         with self.locked():

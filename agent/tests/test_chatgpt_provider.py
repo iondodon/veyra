@@ -124,6 +124,52 @@ class ChatGPTProviderTests(unittest.TestCase):
         self.assertNotIn("failing turn", seen[-1].content.decode())
         self.assertEqual(len(seen), 3)  # No automatic paid retry or fallback.
 
+    def test_finalized_stream_items_survive_empty_terminal_output_and_replay_history(self):
+        reasoning = {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "opaque-reasoning"}
+        reply = {**message("Hello"), "phase": "final_answer"}
+        seen = self.client([
+            [{"type": "response.output_item.done", "output_index": 0, "item": reasoning},
+             {"type": "response.output_item.done", "output_index": 1, "item": reply},
+             {"type": "response.completed", "response": response()}],
+            [{"type": "response.completed", "response": response("resp_2", [message("Remembered")])}],
+        ])
+        provider = provider_module.ChatGPTProvider(auth=self.auth)
+        first = provider.create_response(input="hello")
+        self.assertEqual(first.output_text, "Hello")
+        provider.create_response(input="remember?", previous_response_id=first.id)
+        history = json.loads(seen[1].content)["input"]
+        self.assertEqual(history[1]["encrypted_content"], "opaque-reasoning")
+        self.assertEqual(history[2]["phase"], "final_answer")
+        self.assertEqual(history[2]["content"][0]["text"], "Hello")
+
+    def test_streamed_tool_call_is_preserved_and_failed_completion_never_requests_execution(self):
+        for terminal in (
+            {"type": "response.completed", "response": response()},
+            {"type": "response.failed", "response": {**response(), "status": "failed",
+             "error": {"code": "subscription_sharing_usage_limit_exceeded", "message": "limit"}}},
+        ):
+            self.client([[{"type": "response.output_item.done", "output_index": 0, "item": shell_call()}, terminal]])
+            provider = provider_module.ChatGPTProvider(auth=self.auth)
+            if terminal["type"] == "response.completed":
+                result = provider.create_response(input="where?", tools=bootstrap.SHELL_TOOLS)
+                self.assertEqual(result.output[0].action.commands, ["pwd"])
+            else:
+                with self.assertRaises(ChatGPTError):
+                    provider.create_response(input="where?", tools=bootstrap.SHELL_TOOLS)
+                self.assertEqual(provider._threads, {})
+
+    def test_text_events_are_collected_without_duplicate_deltas_or_done_text(self):
+        self.client([[
+            {"type": "response.output_text.delta", "delta": "Hello", "output_index": 0, "content_index": 0, "item_id": "m"},
+            {"type": "response.output_text.delta", "delta": " world", "output_index": 0, "content_index": 0, "item_id": "m"},
+            {"type": "response.output_text.done", "text": "Hello world", "output_index": 0, "content_index": 0, "item_id": "m"},
+            {"type": "response.completed", "response": response()},
+        ]])
+        provider = provider_module.ChatGPTProvider(auth=self.auth)
+        result = provider.create_response(input="hello")
+        self.assertEqual(result.output_text, "Hello world")
+        self.assertEqual(provider._threads[result.id][-1], {"role": "assistant", "content": "Hello world"})
+
     def test_http_errors_keep_status_code_and_request_id(self):
         self.client([(403, {"error": {"code": "subscription_sharing_user_not_eligible", "message": "not eligible"}})])
         provider = provider_module.ChatGPTProvider(auth=self.auth)
@@ -161,35 +207,29 @@ class ChatGPTProviderTests(unittest.TestCase):
         self.assertEqual(seen, [])
 
 
-class TelegramChatGPTTests(unittest.TestCase):
+class WebChatGPTTests(unittest.TestCase):
     def run_messages(self, messages, provider):
-        queued = iter(messages)
-        sent, executed = [], []
+        events, executed = [], []
 
-        def telegram(method, **_kwargs):
-            self.assertEqual(method, "getUpdates")
-            try:
-                text = next(queued)
-            except StopIteration:
-                raise KeyboardInterrupt
-            return [{"update_id": len(sent), "message": {"from": {"id": 42}, "chat": {"id": 42}, "text": text}}]
+        def incoming():
+            for text in messages:
+                approvals = [e["approval_id"] for e in events if e["type"] == "approval"]
+                yield json.dumps({"text": text, "approval_id": approvals[-1] if approvals else None}) + "\n"
 
         def execute(command):
             executed.append(command)
             return {"stdout": "ok", "stderr": "", "outcome": {"type": "exit", "exit_code": 0}}
 
-        with patch.object(bootstrap, "TELEGRAM_BOT_TOKEN", "fake-token"), \
-                patch.object(bootstrap, "TELEGRAM_OWNER_ID", "42"), \
+        with patch.dict(bootstrap.os.environ, {"VEYRA_WEB_TRANSPORT": "1"}), \
                 patch.object(bootstrap.sys, "argv", ["bootstrap.py"]), \
+                patch.object(bootstrap.sys, "stdin", incoming()), \
                 patch.object(bootstrap, "load_selected_provider", return_value=None), \
                 patch.object(bootstrap, "create_provider", return_value=provider), \
                 patch.object(bootstrap, "save_selected_provider"), \
-                patch.object(bootstrap, "send_intro", return_value=True), \
-                patch.object(bootstrap, "tg", side_effect=telegram), \
-                patch.object(bootstrap, "send", side_effect=lambda _chat, text: sent.append(text)), \
+                patch.object(bootstrap, "emit", side_effect=lambda event_type, **fields: events.append({"type": event_type, **fields})), \
                 patch.object(bootstrap, "run_local", side_effect=execute):
             self.assertEqual(bootstrap.main(), 0)
-        return sent, executed
+        return [e["text"] for e in events if "text" in e], executed
 
     def test_commands_wait_for_owner_approval_and_results_resume_same_provider(self):
         provider = Mock(name="chatgpt-provider", model="plan-model")
@@ -198,7 +238,7 @@ class TelegramChatGPTTests(unittest.TestCase):
         provider.create_response.side_effect = [first, providers.ProviderResponse("resp_2", [], "Done")]
         sent, executed = self.run_messages(["/provider chatgpt", "Where am I?"], provider)
         self.assertEqual(executed, [])
-        self.assertTrue(any("/approve or /deny" in text for text in sent))
+        self.assertTrue(any("wants to run these commands" in text for text in sent))
         provider.create_response.side_effect = [first, providers.ProviderResponse("resp_2", [], "Done")]
         sent, executed = self.run_messages(["/provider chatgpt", "Where am I?", "/approve"], provider)
         self.assertEqual(executed, ["pwd"])

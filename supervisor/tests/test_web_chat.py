@@ -1,0 +1,125 @@
+import http.client
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from web_chat import WebChat
+
+
+class WebChatTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.chat = WebChat(self.root)
+        self.port = self.chat.start(port=0)
+        self.addCleanup(self.chat.close)
+        self.processes = []
+        self.addCleanup(self.stop_agents)
+
+    def stop_agents(self):
+        self.chat.detach()
+        for process in self.processes:
+            process.terminate()
+            process.wait(timeout=3)
+            process.stdin.close()
+            process.stdout.close()
+
+    def request(self, method, path, payload=None, headers=None):
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
+        defaults = {"Origin": f"http://127.0.0.1:{self.port}", "Content-Type": "application/json"}
+        defaults.update(headers or {})
+        body = json.dumps(payload) if payload is not None else None
+        connection.request(method, path, body=body, headers=defaults)
+        response = connection.getresponse()
+        content = response.read()
+        status = response.status
+        connection.close()
+        return status, content
+
+    def wait_for(self, predicate):
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(.01)
+        self.fail("Agent event did not arrive")
+
+    def attach_agent(self):
+        source = '''
+import json, sys, time
+def emit(**event):
+    print("VEYRA_EVENT " + json.dumps(event), flush=True)
+print("runtime diagnostic", flush=True)
+emit(type="ready")
+for line in sys.stdin:
+    message = json.loads(line)
+    time.sleep(.15)
+    emit(type="message", text="Reply: " + message["text"])
+    emit(type="done")
+'''
+        process = subprocess.Popen([sys.executable, "-u", "-c", source], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.processes.append(process)
+        self.chat.attach(process)
+        self.wait_for(lambda: self.chat.ready)
+        return process
+
+    def test_page_available_before_agent_and_messages_round_trip(self):
+        status, html = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn(b"Message Veyra", html)
+        self.assertEqual(self.request("POST", "/api/messages", {"text": "hello"})[0], 503)
+        self.attach_agent()
+        self.assertEqual(self.request("POST", "/api/messages", {"text": "hello"})[0], 202)
+        self.assertEqual(self.request("POST", "/api/messages", {"text": "duplicate"})[0], 409)
+        self.wait_for(lambda: not self.chat.busy)
+        status, data = self.request("GET", "/api/events?after=0")
+        events = json.loads(data)["events"]
+        self.assertEqual(status, 200)
+        self.assertEqual([e["text"] for e in events], ["runtime diagnostic", "hello", "Reply: hello"])
+        self.assertEqual(events[1]["role"], "user")
+
+    def test_foreign_origin_and_rebinding_host_cannot_submit(self):
+        self.attach_agent()
+        self.assertEqual(self.request("POST", "/api/messages", {"text": "/approve"},
+                         {"Origin": "https://attacker.example"})[0], 403)
+        self.assertEqual(self.request("GET", "/", headers={"Host": "attacker.example"})[0], 403)
+        self.assertEqual(self.request("POST", "/api/messages", {"text": "hello"},
+                         {"Origin": ""})[0], 403)
+        self.assertFalse(self.chat.busy)
+
+    def test_stale_approval_cannot_run_after_restart(self):
+        self.attach_agent()
+        with self.chat.lock:
+            self.chat.agent_event({"type": "approval", "approval_id": "old", "text": "$ whoami"})
+        self.assertEqual(self.request("POST", "/api/messages", {"text": "/approve", "approval_id": "wrong"})[0], 409)
+        self.chat.detach()
+        self.attach_agent()
+        self.assertEqual(self.request("POST", "/api/messages", {"text": "/approve", "approval_id": "old"})[0], 409)
+        self.assertIsNone(self.chat.approval_id)
+        self.assertTrue(any("cancelled" in e["text"] for e in self.chat.snapshot(0)["events"]))
+
+    def test_transcript_survives_restart_and_cursor_avoids_duplicates(self):
+        self.chat.publish("First message", role="assistant")
+        first = self.chat.snapshot(0)
+        restarted = WebChat(self.root)
+        self.assertEqual(restarted.snapshot(0)["events"], first["events"])
+        restarted.publish("Second message")
+        later = restarted.snapshot(first["cursor"])
+        self.assertEqual([e["text"] for e in later["events"]], ["Second message"])
+        self.assertFalse(later["status"]["ready"])
+
+    def test_invalid_messages_and_paths_are_rejected(self):
+        for payload in ([], {"text": ""}, {"text": 7}, {"text": "a" * 20001}):
+            self.assertEqual(self.request("POST", "/api/messages", payload)[0], 400)
+        self.assertEqual(self.request("GET", "/api/events?after=oops")[0], 400)
+        self.assertEqual(self.request("GET", "/../state/systemd.env")[0], 404)
+
+
+if __name__ == "__main__":
+    unittest.main()

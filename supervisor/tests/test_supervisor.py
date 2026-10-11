@@ -126,9 +126,7 @@ class GitAgentTests(unittest.TestCase):
 class SingleInstanceLockTests(unittest.TestCase):
     """One supervisor per repository.
 
-    Two supervisors run two agents against one Telegram bot token, and
-    Telegram lets only one of them poll. Refusing the second start keeps
-    that failure visible instead of silent.
+    Refusing a second supervisor protects the agent's state and local chat.
     """
 
     def make_root(self) -> Path:

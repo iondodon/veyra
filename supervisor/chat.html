@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Veyra</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/chat.css">
+  <script src="/chat.js" defer></script>
+</head>
+<body>
+  <header>
+    <a class="brand" href="/" aria-label="Veyra home"><span class="mark">v</span>Veyra<span class="local">LOCAL</span></a>
+    <span id="connection" role="status">Connecting…</span>
+  </header>
+  <main id="conversation" aria-label="Conversation">
+    <div class="welcome" id="welcome"><span class="eyebrow">YOUR STARTING POINT</span><h1>What should we build?</h1><p>Talk to Veyra. Shape what comes next.</p></div>
+    <div id="messages" role="log" aria-label="Chat messages" aria-live="polite"></div>
+  </main>
+  <footer>
+    <div class="shortcuts" aria-label="Chat shortcuts">
+      <button type="button" data-command="/provider chatgpt">ChatGPT plan</button>
+      <button type="button" data-command="/connect">Connect ChatGPT</button>
+      <button type="button" data-command="/provider">Provider settings</button>
+      <details><summary>More</summary><div class="menu">
+        <button type="button" data-command="/provider openai">Use OpenAI API</button>
+        <button type="button" data-command="/provider anthropic">Use Anthropic API</button>
+        <button type="button" data-command="/account">ChatGPT account</button>
+        <button type="button" data-command="/models">ChatGPT models</button>
+      </div></details>
+    </div>
+    <p id="activity" role="status"></p>
+    <form id="composer">
+      <label for="message" class="sr-only">Message Veyra</label>
+      <textarea id="message" rows="1" maxlength="20000" placeholder="Message Veyra…" required></textarea>
+      <button id="send" type="submit" aria-label="Send message" disabled>Send <span aria-hidden="true">↑</span></button>
+    </form>
+    <p class="hint">Enter to send · Shift + Enter for a new line · Commands run only after your approval.</p>
+  </footer>
+</body>
+</html>

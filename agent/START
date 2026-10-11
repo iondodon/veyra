@@ -4,6 +4,16 @@ set -eu
 AGENT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 ROOT_DIR="$(CDPATH= cd -- "$AGENT_DIR/.." && pwd)"
 
+# Normal launches use the supervisor, which owns the quiet web interface.
+case "${1:-}" in
+    --self-test|--chatgpt-*) ;;
+    *)
+        if [ "${VEYRA_WEB_TRANSPORT:-}" != "1" ]; then
+            exec python3 "$ROOT_DIR/supervisor/supervisor"
+        fi
+        ;;
+esac
+
 VENV="$ROOT_DIR/.venv"
 PYTHON="$VENV/bin/python"
 

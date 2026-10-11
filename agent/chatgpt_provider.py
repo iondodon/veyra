@@ -74,7 +74,7 @@ def translate_tools(tools):
         "tools": [{
             "type": "function", "name": "shell", "strict": True,
             "description": (
-                "Request local shell commands. The owner reviews and approves them in Telegram "
+                "Request local shell commands. The owner reviews and approves them in the web chat "
                 "before Veyra executes them. Each command runs in a fresh non-interactive shell."
             ),
             "parameters": {
@@ -137,8 +137,17 @@ class ChatGPTProvider:
                     include=["reasoning.encrypted_content"],
                 ) as stream:
                     response = None
+                    completed_items = {}
+                    text_parts = {}
                     for event in stream:
-                        if event.type == "response.completed":
+                        if event.type == "response.output_item.done":
+                            completed_items[event.output_index] = event.item
+                        elif event.type == "response.output_text.delta":
+                            key = (event.output_index, event.content_index)
+                            text_parts[key] = text_parts.get(key, "") + event.delta
+                        elif event.type == "response.output_text.done":
+                            text_parts[(event.output_index, event.content_index)] = event.text
+                        elif event.type == "response.completed":
                             response = event.response
                         elif event.type == "response.failed":
                             error = event.response.error
@@ -156,11 +165,26 @@ class ChatGPTProvider:
                 raise ChatGPTError("ChatGPT returned an unreadable response stream. Try again later.") from None
         if response is None or response.status != "completed":
             raise ChatGPTError("ChatGPT's response did not complete. Try again later.")
-        calls = normalize_output(response.output)
+        # Some plan streams leave output empty in the terminal response.
+        # Finalized item events carry messages, tool calls, and encrypted reasoning.
+        # Never expose these or advance history until response.completed succeeds.
+        output = [completed_items[index] for index in sorted(completed_items)]
+        ids = {item.id for item in output}
+        output.extend(item for item in response.output if item.id not in ids)
+        calls = normalize_output(output)
+        text = "".join(
+            getattr(content, "text", "") or getattr(content, "refusal", "")
+            for item in output if item.type == "message"
+            for content in item.content
+        ) or "".join(text_parts[key] for key in sorted(text_parts))
+        if not text and not calls:
+            raise ChatGPTError("ChatGPT completed without a message or command request. Please try again.")
         # Replay reasoning (including encrypted content) and tool calls verbatim.
         # Failed streams never replace the last successful conversation state.
-        history.extend(item.model_dump(exclude_none=True) for item in response.output)
+        history.extend(item.model_dump(exclude_none=True) for item in output)
+        if text and not any(item.type == "message" for item in output):
+            history.append({"role": "assistant", "content": text})
         self._threads[response.id] = history
         while len(self._threads) > THREAD_HISTORY_LIMIT:
             self._threads.popitem(last=False)
-        return ProviderResponse(response.id, calls, response.output_text)
+        return ProviderResponse(response.id, calls, text)

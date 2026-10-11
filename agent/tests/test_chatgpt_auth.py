@@ -209,6 +209,25 @@ class AuthTests(unittest.TestCase):
         verify.assert_called_once_with("id-secret", "oaiapp_test", params["nonce"])
         self.assertEqual(self.store.account()["subject"], "u1")
 
+    def test_web_login_reports_to_chat_without_terminal_output(self):
+        browser, captured = self.browser()
+        notices = []
+        identity = {"issuer": auth.ISSUER, "subject": "u1", "email": "owner@example.test"}
+        def notify(text):
+            notices.append(text)
+            if text.startswith("Continue with ChatGPT\n"):
+                browser(text.split("\n", 1)[1])
+        terminal = io.StringIO()
+        with patch.object(auth.webbrowser, "open") as open_browser, \
+                patch.object(auth, "http_json", return_value=token_set()), \
+                patch.object(auth, "validate_identity", return_value=identity), redirect_stdout(terminal):
+            self.store.login(open_browser=False, notify=notify, timeout=5)
+        open_browser.assert_not_called()
+        self.assertTrue(captured)
+        self.assertEqual(terminal.getvalue(), "")
+        self.assertTrue(any("Connected:" in n for n in notices))
+        self.assertNotIn("access-secret", "\n".join(notices))
+
     def test_returning_login_reuses_host_client_and_does_not_print_tokens(self):
         self.seed()
         browser, captured = self.browser(lambda p: [{"state": p["state"], "code": "code"}])
