@@ -1,5 +1,5 @@
 {
-  "summary": "Mobile typing and chat scrolling are more stable.",
-  "instructions": "Tap the message box to type. The chat fits above the on-screen keyboard and the larger input text avoids focus zoom on iPhone. Scroll up to read earlier messages; incoming replies leave your reading position alone. Return to the bottom to follow new messages. Long command output scrolls with the conversation on phones. Pinch zoom remains available.",
+  "summary": "Scrollable command output boxes are back on mobile.",
+  "instructions": "Swipe inside a long command output box to scroll its contents. Swipe outside the box to scroll the conversation. Output boxes fit the available screen height, including while the keyboard is open. The mobile keyboard layout, larger input text, stable conversation scrolling, and pinch zoom remain available.",
   "links": []
 }

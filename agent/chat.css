@@ -29,7 +29,7 @@ html.chat-app,.chat-page{height:100%;overflow:hidden;overscroll-behavior:none}
   .chat-page #conversation{padding:22px max(16px,env(safe-area-inset-right)) 16px max(16px,env(safe-area-inset-left))}
   .chat-page footer{padding:10px max(16px,env(safe-area-inset-right)) max(12px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}
   .chat-page .message{animation:none}
-  .chat-page .message.tool .body{max-height:none;overflow:visible}
+  .chat-page .message.tool .body{max-height:min(360px,calc(var(--chat-height,100dvh) * .45));overflow:auto;overscroll-behavior-y:contain;-webkit-overflow-scrolling:touch}
   .chat-page .password-reminder{padding:10px 12px;margin-bottom:10px}
   .chat-page.keyboard-open #password-reminder,.chat-page.keyboard-open .hint{display:none}
   .chat-page.keyboard-open footer{padding-bottom:10px}
