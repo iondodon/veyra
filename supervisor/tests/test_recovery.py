@@ -43,6 +43,16 @@ class RecoveryTests(unittest.TestCase):
         self.recovery.request({"action": action, "token": preview["token"], "confirmed": True})
         return self.recovery.take_request()
 
+    def test_status_polling_does_not_write_the_git_index(self):
+        path = self.root / "agent/existing.py"
+        stat = path.stat()
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns - 10_000_000_000))
+        index = self.root / ".git/index"
+        original = index.read_bytes()
+        data = self.recovery.status(True, self.working)
+        self.assertEqual(data["changes"], [])
+        self.assertEqual(index.read_bytes(), original)
+
     def test_discard_preserves_state_workspace_ignored_files_and_unrelated_staging(self):
         self.write("agent/START", "draft\n")
         (self.root / "agent/existing.py").unlink()

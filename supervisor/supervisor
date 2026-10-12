@@ -40,7 +40,7 @@ def run_git(root: Path, *arguments: str) -> str:
     """Run a read-only Git query and return its normalized stdout."""
     try:
         result = subprocess.run(
-            ["git", "-C", str(root), *arguments],
+            ["git", "--no-optional-locks", "-C", str(root), *arguments],
             check=False,
             capture_output=True,
             text=True,

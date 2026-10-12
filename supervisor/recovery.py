@@ -34,7 +34,9 @@ class Recovery:
             self.last_working = None
 
     def git(self, *args, env=None):
-        result = subprocess.run(["git", "-C", str(self.root), *args], capture_output=True,
+        # Status polling must not refresh the index while recovery is writing it.
+        # Git still takes required locks for restore, update-ref and other writes.
+        result = subprocess.run(["git", "--no-optional-locks", "-C", str(self.root), *args], capture_output=True,
                                 env=env, timeout=20)
         if result.returncode:
             raise RecoveryError("Git operation failed (exit " + str(result.returncode) + ")."

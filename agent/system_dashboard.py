@@ -20,7 +20,7 @@ class SystemDashboard:
 
     def git(self, *args):
         try:
-            result = subprocess.run(['git', *args], cwd=self.root, capture_output=True,
+            result = subprocess.run(['git', '--no-optional-locks', *args], cwd=self.root, capture_output=True,
                                     text=True, timeout=2, check=True)
             return result.stdout.strip()
         except (OSError, subprocess.SubprocessError):
