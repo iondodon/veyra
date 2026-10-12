@@ -58,7 +58,7 @@ def translate_input(model_input):
                 "type": "function_call_output", "call_id": item["call_id"],
                 "output": json.dumps(item["output"], ensure_ascii=False),
             })
-        elif item.get("role") == "user":
+        elif item.get("role") in ("user", "assistant"):
             translated.append(item)
         else:
             raise ChatGPTError("Unsupported ChatGPT input type.")

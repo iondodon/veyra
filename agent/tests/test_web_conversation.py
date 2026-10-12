@@ -44,6 +44,14 @@ class ConversationTests(unittest.TestCase):
         self.assertEqual(content[0], {'type': 'input_text', 'text': 'Describe this'})
         self.assertEqual(content[1], {'type': 'input_image', 'image_url': IMAGE['data_url']})
 
+    def test_explicit_window_replaces_unbounded_response_chain(self):
+        context = [{'role': 'assistant', 'content': 'Earlier'}, {'role': 'user', 'content': 'Now'}]
+        self.chat.previous_response_id = 'old-response'
+        self.chat.handle('Now', context=context)
+        kwargs = self.chat.provider.create_response.call_args.kwargs
+        self.assertEqual(kwargs['input'], context)
+        self.assertNotIn('previous_response_id', kwargs)
+
     def request_commands(self):
         self.chat.handle("Please check")
         return self.chat.pending[2]

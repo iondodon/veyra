@@ -76,6 +76,26 @@ class WebChat:
         with closing(sqlite3.connect(self.database, timeout=10)) as connection, connection:
             connection.execute("INSERT INTO events(payload) VALUES (?)", (json.dumps(payload, ensure_ascii=False),))
 
+    def context_window(self):
+        """Last 50 chat messages, oldest first; not session-scoped or summarized."""
+        from images import model_input
+        messages = []
+        with closing(sqlite3.connect(self.database, timeout=10)) as connection:
+            for (payload,) in connection.execute("SELECT payload FROM events ORDER BY id DESC"):
+                event = json.loads(payload)
+                if event.get("role") not in ("user", "assistant") or event.get("kind") != "message":
+                    continue
+                text = self.credentials.redact(event.get("text", ""))
+                if event["role"] == "user":
+                    content = model_input(text, event.get("images", []))
+                    message = content[0] if isinstance(content, list) else {"role": "user", "content": content}
+                else:
+                    message = {"role": "assistant", "content": text}
+                messages.append(message)
+                if len(messages) == 50:
+                    break
+        return list(reversed(messages))
+
     def snapshot(self, after):
         with self.lock:
             with closing(sqlite3.connect(self.database, timeout=10)) as connection:
@@ -230,11 +250,13 @@ class WebChat:
                 return 409, {"error": "That command request is no longer active."}
             self.busy = True
             self.publish(text, role="user", images=images)
+            message = {"text": text, "approval_id": approval_id, "images": images,
+                       "context": self.context_window()}
             if self.process is None:
-                self.inbox.put({"text": text, "approval_id": approval_id, "images": images})
+                self.inbox.put(message)
                 return 202, {"ok": True}
             try:
-                self.process.stdin.write(json.dumps({"text": text, "approval_id": approval_id, "images": images}) + "\n")
+                self.process.stdin.write(json.dumps(message) + "\n")
                 self.process.stdin.flush()
             except (OSError, ValueError):
                 self.detach()

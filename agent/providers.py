@@ -267,7 +267,12 @@ class AnthropicProvider:
                     "expired; send the request again"
                 )
             messages = list(thread)
-        messages.append(user_turn(input))
+        if isinstance(input, list) and input and all(item.get("role") in ("user", "assistant") for item in input):
+            from images import anthropic_content
+            messages.extend({"role": item["role"], "content": anthropic_content(item["content"])
+                             if isinstance(item["content"], list) else item["content"]} for item in input)
+        else:
+            messages.append(user_turn(input))
 
         request = {
             "model": self.model,

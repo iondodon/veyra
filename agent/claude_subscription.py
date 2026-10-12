@@ -182,7 +182,12 @@ class ClaudeSubscriptionProvider:
         history = list(self._threads.get(previous_response_id, []))
         if not isinstance(input, (str, list)):
             raise ValueError("Unsupported Claude conversation input")
-        history.append({"role": "user", "content": input})
+        if isinstance(input, list) and input and all(item.get("role") in ("user", "assistant") for item in input):
+            # Keep multimodal users in the existing image replay representation.
+            history.extend({"role": item["role"], "content": [item]
+                            if isinstance(item["content"], list) else item["content"]} for item in input)
+        else:
+            history.append({"role": "user", "content": input})
         system = instructions + (
             "\n\nReturn the response as structured data: text is your reply; commands is a list "
             "of proposed shell commands, or an empty list. You have no direct tools. "
