@@ -19,6 +19,7 @@ html.chat-app,.chat-page{height:100%;overflow:hidden;overscroll-behavior:none}
 #chat-shell>header{width:100%;height:calc(80px + env(safe-area-inset-top));padding-top:env(safe-area-inset-top);flex-shrink:0;margin:0 auto}
 .chat-page #conversation{flex:1;min-height:0;width:100%;margin:0 auto;padding:36px 32px 24px;overflow-y:auto;overflow-x:hidden;overscroll-behavior-y:contain;scrollbar-gutter:stable;-webkit-overflow-scrolling:touch}
 .chat-page footer{position:relative;flex-shrink:0;padding:12px 32px max(16px,env(safe-area-inset-bottom));background:#fafaf7}
+.chat-page .shortcuts{margin-bottom:12px}
 .chat-page .menu{max-height:max(60px,calc(var(--chat-height,100dvh) - var(--composer-height,240px) - 20px));overflow-y:auto;overscroll-behavior-y:contain}
 .chat-page #activity:empty{display:none}
 .chat-page textarea{min-width:0;font-size:16px;max-height:min(180px,calc(var(--chat-height,100dvh) * .3));overflow-y:auto}

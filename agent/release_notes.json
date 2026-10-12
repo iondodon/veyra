@@ -1,5 +1,5 @@
 {
-  "summary": "Scrollable command output boxes are back on mobile.",
-  "instructions": "Swipe inside a long command output box to scroll its contents. Swipe outside the box to scroll the conversation. Output boxes fit the available screen height, including while the keyboard is open. The mobile keyboard layout, larger input text, stable conversation scrolling, and pinch zoom remain available.",
+  "summary": "More space above the message input.",
+  "instructions": "The Settings button and service/model information now have more space above the message box on phones and desktop.",
   "links": []
 }
