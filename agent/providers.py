@@ -204,6 +204,9 @@ def user_turn(model_input) -> dict:
     """One user turn: either chat text or shell results going back."""
     if isinstance(model_input, str):
         return {"role": "user", "content": model_input}
+    if len(model_input or []) == 1 and model_input[0].get("role") == "user":
+        from images import anthropic_content
+        return {"role": "user", "content": anthropic_content(model_input[0]["content"])}
     results = []
     for item in model_input or []:
         if item.get("type") != "shell_call_output":

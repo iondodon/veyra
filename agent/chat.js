@@ -13,6 +13,8 @@ const apiDialog = document.querySelector("#api-dialog");
 const apiForm = document.querySelector("#api-form");
 const apiStatus = document.querySelector("#api-status");
 const apiKey = document.querySelector("#api-key");
+let attachments = [];
+let readingImages = false;
 let cursor = 0;
 let state = {ready: false, busy: false, approval_id: null};
 let posting = false;
@@ -81,7 +83,7 @@ layoutObserver.observe(composerFooter);
 syncViewport();
 
 window.VeyraUpdates.configure({poll: false,
-  canReload: () => !input.value && !posting && !passwordSaving && !keySaving});
+  canReload: () => !input.value && !attachments.length && !readingImages && !posting && !passwordSaving && !keySaving});
 window.addEventListener("veyra:update", refreshControls);
 
 function requestHeaders(json = false) {
@@ -91,7 +93,8 @@ function requestHeaders(json = false) {
 
 function refreshControls() {
   const available = connected && state.ready && !state.busy && !posting && !passwordSaving && !keySaving;
-  sendButton.disabled = !available || !input.value.trim();
+  document.querySelectorAll("#image-previews button").forEach(button => { button.disabled = posting; });
+  sendButton.disabled = !available || readingImages || (!input.value.trim() && !attachments.length);
   document.querySelectorAll("[data-message]").forEach(button => { button.disabled = !available; });
   document.querySelectorAll("[data-approval]").forEach(button => {
     button.disabled = !available || button.dataset.approval !== state.approval_id;
@@ -155,6 +158,12 @@ function appendMessage(event) {
   body.className = "body";
   appendText(body, event.text);
   article.append(label, body);
+  for (const image of event.images || []) {
+    if (!/^data:image\/(png|jpeg|webp|gif);base64,/.test(image.data_url)) continue;
+    const img = document.createElement("img");
+    img.src = image.data_url; img.alt = image.name; img.className = "chat-image";
+    article.append(img);
+  }
   if (event.kind === "update" && Array.isArray(event.links)) {
     const actions = document.createElement("div");
     actions.className = "setup-actions";
@@ -261,7 +270,7 @@ async function poll() {
   window.setTimeout(poll, 500);
 }
 
-async function submit(text, approvalId = null) {
+async function submit(text, approvalId = null, images = []) {
   if (posting || !connected || !state.ready || state.busy || passwordSaving || keySaving) return;
   posting = true;
   notice = "";
@@ -269,7 +278,7 @@ async function submit(text, approvalId = null) {
   try {
     const response = await fetch("/api/messages", {
       method: "POST", headers: requestHeaders(true),
-      body: JSON.stringify({text, approval_id: approvalId}),
+      body: JSON.stringify({text, approval_id: approvalId, images}),
     });
     const result = await response.json();
     if (result.open_api_keys) {
@@ -279,6 +288,8 @@ async function submit(text, approvalId = null) {
     }
     if (!response.ok) throw new Error(result.error || "Could not send your message.");
     state.busy = true;
+    if (images.length) { attachments = []; renderAttachments(); }
+    window.VeyraUpdates.saved(document.querySelector("#composer"));
     if (input.value.trim() === text) { input.value = ""; input.style.height = ""; }
     document.querySelectorAll("details").forEach(details => { details.open = false; });
     scrollToLatest();
@@ -289,7 +300,7 @@ async function submit(text, approvalId = null) {
 document.querySelector("#composer").addEventListener("submit", event => {
   event.preventDefault();
   const text = input.value.trim();
-  submit(text, /^(?:\/approve|\/deny|approve(?: these commands)?|deny(?: these commands)?)[.!]?$/i.test(text) ? state.approval_id : null);
+  submit(text, /^(?:\/approve|\/deny|approve(?: these commands)?|deny(?: these commands)?)[.!]?$/i.test(text) ? state.approval_id : null, attachments.slice());
 });
 input.addEventListener("keydown", event => {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
@@ -415,3 +426,41 @@ passwordForm.addEventListener("submit", async event => {
   }
 });
 poll();
+
+function renderAttachments() {
+  const previews = document.querySelector("#image-previews");
+  previews.replaceChildren();
+  attachments.forEach((image, index) => {
+    const item = document.createElement("div");
+    const img = document.createElement("img"); img.src = image.data_url; img.alt = image.name;
+    const remove = document.createElement("button"); remove.type = "button";
+    remove.textContent = "Remove " + image.name;
+    remove.disabled = posting;
+    remove.addEventListener("click", () => { attachments.splice(index, 1); renderAttachments(); });
+    item.append(img, remove); previews.append(item);
+  });
+  refreshControls();
+}
+document.querySelector("#attach").addEventListener("click", () => {
+  if (!posting && !readingImages) document.querySelector("#image-files").click();
+});
+document.querySelector("#image-files").addEventListener("change", async event => {
+  const files = [...event.target.files]; event.target.value = "";
+  if (readingImages || posting) return;
+  readingImages = true; refreshControls();
+  try {
+    if (attachments.length + files.length > 4) throw new Error("Attach up to 4 images.");
+    const added = [];
+    for (const file of files) {
+      if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type) || file.size > 5 * 1024 * 1024)
+        throw new Error("Use PNG, JPEG, WebP or GIF images, at most 5 MB each.");
+      const data_url = await new Promise((resolve, reject) => {
+        const reader = new FileReader(); reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error("Could not read image.")); reader.readAsDataURL(file);
+      });
+      added.push({name: file.name.slice(0, 255), data_url});
+    }
+    attachments.push(...added); notice = "";
+  } catch (error) { notice = error.message; }
+  finally { readingImages = false; renderAttachments(); }
+});

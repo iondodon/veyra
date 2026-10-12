@@ -195,8 +195,34 @@ class ClaudeSubscriptionProvider:
             "--mcp-config", '{"mcpServers":{}}', "--permission-mode", "dontAsk",
             "--no-session-persistence", "--max-turns", "3", "--model", self._model_choice,
             "--system-prompt", system)
+        # The CLI needs actual image blocks, not base64 embedded in a text prompt.
+        from images import anthropic_content
+        image_blocks = []
+        prompt_history = []
+        for turn in history:
+            content = turn['content']
+            if (isinstance(content, list) and len(content) == 1
+                    and content[0].get('role') == 'user'):
+                blocks = anthropic_content(content[0]['content'])
+                references = []
+                for block in blocks:
+                    if block['type'] == 'image':
+                        image_blocks.append(block)
+                        references.append({'image': len(image_blocks)})
+                    else:
+                        references.append(block)
+                prompt_history.append({'role': turn['role'], 'content': references})
+            else:
+                prompt_history.append(turn)
+        stdin = json.dumps({'conversation': prompt_history}, ensure_ascii=False)
+        if image_blocks:
+            command[command.index('--output-format') + 1] = 'stream-json'
+            command.extend(['--input-format', 'stream-json', '--verbose'])
+            stdin = json.dumps({'type': 'user', 'message': {'role': 'user', 'content': [
+                {'type': 'text', 'text': stdin + '\nImages below are numbered in conversation order.'},
+                *image_blocks]}}) + '\n'
         try:
-            result = subprocess.run(command, input=json.dumps({"conversation": history}, ensure_ascii=False),
+            result = subprocess.run(command, input=stdin,
                 env=self.auth.env, cwd=self.auth.directory, capture_output=True, text=True,
                 timeout=180, umask=0o077)
         except subprocess.TimeoutExpired:
@@ -204,7 +230,12 @@ class ClaudeSubscriptionProvider:
         except OSError:
             raise ProviderConfigError("Claude Code couldn't start. Install or update it, then try again.") from None
         try:
-            payload = json.loads(result.stdout)
+            if image_blocks:
+                events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+                payload = next((event for event in reversed(events) if event.get('type') == 'result'),
+                               events[-1] if events else {})
+            else:
+                payload = json.loads(result.stdout)
             if result.returncode != 0 or payload.get("is_error"):
                 raise ValueError()
             reply = payload["structured_output"]

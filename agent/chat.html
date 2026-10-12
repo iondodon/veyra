@@ -37,12 +37,15 @@
       </div></details>
     </div>
     <p id="activity" role="status"></p>
+    <div id="image-previews" aria-label="Attached images"></div>
     <form id="composer">
+      <button id="attach" type="button" aria-label="Attach images">＋ Image</button>
+      <input id="image-files" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
       <label for="message" class="sr-only">Message Veyra</label>
-      <textarea id="message" rows="1" maxlength="20000" placeholder="Message Veyra…" required></textarea>
+      <textarea id="message" rows="1" maxlength="20000" placeholder="Message Veyra…"></textarea>
       <button id="send" type="submit" aria-label="Send message" disabled>Send <span aria-hidden="true">↑</span></button>
     </form>
-    <p class="hint">Enter to send · Shift + Enter for a new line · Commands run only after your approval.</p>
+    <p class="hint">Up to 4 images · 5 MB each · Enter to send · Shift + Enter for a new line · Commands run only after your approval.</p>
   </footer>
   </div>
   <dialog id="password-dialog" aria-labelledby="password-title">

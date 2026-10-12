@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Veyra's agent and standalone web application."""
 
+from images import model_input, validate_images
 import json
 import os
 import re
@@ -429,11 +430,11 @@ class Conversation:
         self.login_thread = threading.Thread(target=finish, daemon=True)
         self.login_thread.start()
 
-    def handle(self, text, approval_id=None):
+    def handle(self, text, approval_id=None, images=None):
         with self.lock:
-            return self.handle_locked(text, approval_id)
+            return self.handle_locked(text, approval_id, validate_images(images or []))
 
-    def handle_locked(self, text, approval_id=None):
+    def handle_locked(self, text, approval_id=None, images=None):
         if self.credentials.contains_secret(text):
             self.request_key()
             return
@@ -537,7 +538,7 @@ class Conversation:
                 current_key = self.environment().get(api_key_env_var(self.provider.name))
                 if current_key != self.active_api_key:
                     self.select_provider(self.provider.name)
-            kwargs = {"instructions": self.instructions, "input": text, "tools": SHELL_TOOLS}
+            kwargs = {"instructions": self.instructions, "input": model_input(text, images), "tools": SHELL_TOOLS}
             if self.previous_response_id:
                 kwargs["previous_response_id"] = self.previous_response_id
             response = self.provider.create_response(**kwargs)
@@ -627,7 +628,7 @@ def run_conversation(lines) -> int:
     for line in lines:
         try:
             message = json.loads(line)
-            conversation.handle(message["text"], message.get("approval_id"))
+            conversation.handle(message["text"], message.get("approval_id"), message.get("images"))
         except (ChatGPTError, ProviderConfigError) as exc:
             conversation.report_error(exc)
         except Exception as exc:

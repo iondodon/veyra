@@ -37,6 +37,13 @@ class ConversationTests(unittest.TestCase):
             ProviderResponse(id="r2", output=[], output_text="Finished."),
         ]
 
+    def test_image_message_reaches_model_as_multimodal_content(self):
+        from test_images import IMAGE
+        self.chat.handle("Describe this", images=[IMAGE])
+        content = self.chat.provider.create_response.call_args.kwargs['input'][0]['content']
+        self.assertEqual(content[0], {'type': 'input_text', 'text': 'Describe this'})
+        self.assertEqual(content[1], {'type': 'input_image', 'image_url': IMAGE['data_url']})
+
     def request_commands(self):
         self.chat.handle("Please check")
         return self.chat.pending[2]

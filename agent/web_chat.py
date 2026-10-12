@@ -14,6 +14,7 @@ import sqlite3
 import threading
 from urllib.parse import parse_qs, urlsplit
 
+from images import validate_images, MAX_REQUEST_BYTES
 from system_dashboard import SystemDashboard
 from version_timeline import VersionTimeline, HistoryUnavailable
 
@@ -206,8 +207,12 @@ class WebChat:
     def submit(self, payload):
         if not isinstance(payload, dict):
             return 400, {"error": "Send a chat message."}
+        try:
+            images = validate_images(payload.get("images", []))
+        except ValueError as exc:
+            return 400, {"error": str(exc)}
         text = payload.get("text")
-        if not isinstance(text, str) or not text.strip() or len(text) > 20000:
+        if not isinstance(text, str) or (not text.strip() and not images) or len(text) > 20000:
             return 400, {"error": "Enter a message of 1–20,000 characters."}
         text = text.strip()
         if self.credentials.contains_secret(text):
@@ -217,17 +222,19 @@ class WebChat:
                 return 503, {"error": "Veyra is starting. Please wait a moment."}
             if self.busy:
                 return 409, {"error": "Veyra is still working on your last message."}
+            if images and (self.approval_id or not self.configuration.get('connected')):
+                return 409, {"error": "Connect a service and finish pending command approvals before sending images."}
             approval_id = payload.get("approval_id")
             approval = text.lower().rstrip(".!").strip()
             if approval in ("/approve", "/deny", "approve", "deny", "approve these commands", "deny these commands") and (not self.approval_id or approval_id != self.approval_id):
                 return 409, {"error": "That command request is no longer active."}
             self.busy = True
-            self.publish(text, role="user")
+            self.publish(text, role="user", images=images)
             if self.process is None:
-                self.inbox.put({"text": text, "approval_id": approval_id})
+                self.inbox.put({"text": text, "approval_id": approval_id, "images": images})
                 return 202, {"ok": True}
             try:
-                self.process.stdin.write(json.dumps({"text": text, "approval_id": approval_id}) + "\n")
+                self.process.stdin.write(json.dumps({"text": text, "approval_id": approval_id, "images": images}) + "\n")
                 self.process.stdin.flush()
             except (OSError, ValueError):
                 self.detach()
@@ -366,7 +373,7 @@ class WebChat:
                     return self.respond(400, {"error": "Use Content-Length."})
                 try:
                     length = int(self.headers.get("Content-Length", "0"))
-                    if not 0 < length <= 100000:
+                    if not 0 < length <= (MAX_REQUEST_BYTES if self.path == "/api/messages" else 100000):
                         return self.respond(413, {"error": "Message is too large."})
                     payload = json.loads(self.rfile.read(length))
                 except (ValueError, UnicodeDecodeError):
