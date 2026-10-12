@@ -21,16 +21,9 @@ let passwordSaving = false;
 let keySaving = false;
 let canSaveKeys = false;
 let pollComplete = Promise.resolve();
-const pageVersion = document.querySelector('meta[name="veyra-ui-version"]')?.content;
-let updatePending = false;
-
-function refreshPageIfReady() {
-  if (!updatePending) return false;
-  // Keep drafts and private form contents in this page until the owner finishes.
-  if (input.value || posting || passwordSaving || keySaving || document.querySelector("dialog[open]")) return false;
-  window.location.reload();
-  return true;
-}
+window.VeyraUpdates.configure({poll: false,
+  canReload: () => !input.value && !posting && !passwordSaving && !keySaving});
+window.addEventListener("veyra:update", refreshControls);
 
 function requestHeaders(json = false) {
   return {...(json ? {"Content-Type": "application/json"} : {}),
@@ -44,7 +37,7 @@ function refreshControls() {
   document.querySelectorAll("[data-approval]").forEach(button => {
     button.disabled = !available || button.dataset.approval !== state.approval_id;
   });
-  activity.textContent = (updatePending ? "An update is ready. Finish your draft or close settings to load it automatically." : notice) || (!connected ? "Reconnecting to Veyra…" : !state.ready ?
+  activity.textContent = (window.VeyraUpdates.pending ? "An update is ready. Finish your draft or close settings to load it automatically." : notice) || (!connected ? "Reconnecting to Veyra…" : !state.ready ?
     "Veyra is starting…" : state.busy ? "Veyra is working…" : state.approval_id ?
     "Review the requested commands and approve or deny them." : "");
   connection.textContent = connected && state.ready ? "Connected" : connected ? "Starting" : "Reconnecting";
@@ -179,8 +172,7 @@ async function loadEvents() {
       if (response.status === 503) throw new Error("Veyra is restarting");
       if (!response.ok) throw new Error("Connection unavailable");
       const data = await response.json();
-      updatePending = Boolean(pageVersion && data.status.ui_version && pageVersion !== data.status.ui_version);
-      if (refreshPageIfReady()) return;
+      if (window.VeyraUpdates.check(data.status)) return;
       if (state.session_id && state.session_id !== data.status.session_id) {
         messages.replaceChildren();
         cursor = 0;

@@ -174,8 +174,28 @@ for line in sys.stdin:
         self.assertEqual(status, 200)
         self.assertIn(('name="veyra-ui-version" content="' + version + '"').encode(), page)
         self.assertNotIn(b"{{UI_VERSION}}", page)
+        self.assertIn(b'<script src="/app-updates.js" defer></script>', page)
+        status, version_body = self.request("GET", "/api/app-version")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(version_body), {"ready": False, "ui_version": version})
+        self.assertEqual(self.request("GET", "/app-updates.js")[0], 200)
         with patch("pathlib.Path.read_bytes", side_effect=AssertionError("Reading a changed working tree")):
             self.assertEqual(self.request("GET", "/chat.js"), (200, self.chat.assets["chat.js"]))
+
+    def test_every_restart_changes_version_even_when_all_assets_are_identical(self):
+        restarted = WebChat(self.root)
+        self.assertEqual(restarted.assets, self.chat.assets)
+        self.assertNotEqual(restarted.ui_version, self.chat.ui_version)
+
+    def test_html_responses_automatically_include_the_shared_update_monitor(self):
+        for html in (b"<!doctype html><title>Another page</title><h1>Page</h1>",
+                     b"<HTML><HEAD><title>Another page</title></HEAD><body>Page</body></HTML>"):
+            with self.subTest(html=html):
+                self.chat.assets["chat.html"] = html
+                status, page = self.request("GET", "/")
+                self.assertEqual(status, 200)
+                self.assertIn(b'<script src="/app-updates.js" defer></script>', page)
+                self.assertIn(self.chat.ui_version.encode(), page)
 
     def test_routine_logs_are_hidden_and_errors_remain_visible(self):
         self.chat.publish("starting agent", kind="status")
@@ -205,7 +225,7 @@ for line in sys.stdin:
         handler = self.chat.server.RequestHandlerClass
         credential = "Basic " + base64.b64encode(("veyra:" + self.chat.network_password).encode()).decode()
         with patch.object(handler, "local_client", return_value=False):
-            for path in ("/", "/chat.js", "/api/events", "/api/settings"):
+            for path in ("/", "/chat.js", "/app-updates.js", "/api/app-version", "/api/events", "/api/settings"):
                 self.assertEqual(self.request("GET", path)[0], 401)
                 self.assertEqual(self.request("GET", path, headers={"Authorization": "Basic wrong"})[0], 401)
                 self.assertEqual(self.request("GET", path, headers={"Authorization": credential})[0], 200)

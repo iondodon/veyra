@@ -1,7 +1,6 @@
 """Local web chat, with authenticated access from other devices."""
 
 import base64
-import hashlib
 from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ipaddress
@@ -9,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import re
 import secrets
 import socketserver
 import sqlite3
@@ -32,10 +32,7 @@ class WebChat:
     def __init__(self, root):
         self.release_notes = load_notes(root)
         self.assets = {filename: (ASSETS / filename).read_bytes()
-                       for filename in ("chat.html", "chat.js", "chat.css")}
-        self.ui_version = hashlib.sha256(b"".join(
-            filename.encode() + b"\0" + body for filename, body in self.assets.items()
-        )).hexdigest()
+                       for filename in ("chat.html", "chat.js", "chat.css", "app_updates.js")}
         directory = Path(root) / "state/chat"
         directory.mkdir(parents=True, exist_ok=True)
         directory.chmod(0o700)
@@ -63,6 +60,8 @@ class WebChat:
         with closing(sqlite3.connect(self.database)) as connection:
             self.session_after = connection.execute("SELECT COALESCE(MAX(id), 0) FROM events").fetchone()[0]
         self.session_id = secrets.token_hex(12)
+        # Reload every open app page after any restart, regardless of which files changed.
+        self.ui_version = self.session_id
         self.release_announced = False
         self.configuration = {"provider": None, "model": None, "connected": False, "sign_in_url": None}
 
@@ -267,6 +266,13 @@ class WebChat:
 
             def respond(self, status, data, content_type="application/json; charset=utf-8"):
                 body = json.dumps(data).encode() if isinstance(data, dict) else data
+                if content_type.startswith("text/html"):
+                    updates = ('<meta name="veyra-ui-version" content="' + chat.ui_version + '">'
+                               '<script src="/app-updates.js" defer></script>').encode()
+                    head = (re.search(br"<head\b[^>]*>", body, re.IGNORECASE)
+                            or re.search(br"<!doctype\b[^>]*>", body, re.IGNORECASE))
+                    position = head.end() if head else 0
+                    body = body[:position] + updates + body[position:]
                 self.send_response(status)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(body)))
@@ -287,6 +293,8 @@ class WebChat:
                 parsed = urlsplit(self.path)
                 if parsed.path == "/_health":
                     return self.respond(200, {"ready": chat.ready, "busy": chat.busy})
+                if parsed.path == "/api/app-version":
+                    return self.respond(200, {"ready": chat.ready, "ui_version": chat.ui_version})
                 if parsed.path == "/api/events":
                     try:
                         after = max(0, int(parse_qs(parsed.query).get("after", ["0"])[0]))
@@ -306,13 +314,12 @@ class WebChat:
                     "/": ("chat.html", "text/html; charset=utf-8"),
                     "/chat.css": ("chat.css", "text/css; charset=utf-8"),
                     "/chat.js": ("chat.js", "text/javascript; charset=utf-8"),
+                    "/app-updates.js": ("app_updates.js", "text/javascript; charset=utf-8"),
                 }
                 if parsed.path not in assets:
                     return self.respond(404, {"error": "Page not found."})
                 filename, content_type = assets[parsed.path]
                 body = chat.assets[filename]
-                if filename == "chat.html":
-                    body = body.replace(b"{{UI_VERSION}}", chat.ui_version.encode())
                 self.respond(200, body, content_type)
 
             def do_POST(self):

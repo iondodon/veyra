@@ -242,9 +242,12 @@ Only the supervisor listens on a network port.
 The supervisor watches `HEAD`. After a successor commit passes its self-test,
 it restarts the agent while keeping the address available and opening a fresh
 conversation for the new agent session.
-The open chat reconnects during a restart and automatically loads changed page
-assets, so new navigation and controls appear without a manual refresh. It waits
-while a message draft or settings dialog is open, keeping unsent text and private
+Open app pages automatically reload after every agent restart, so content,
+layout, styling, controls, behavior, and other assets load from the current
+version without a manual refresh. HTML responses include the shared update
+monitor automatically, including pages added later. The chat reconnects during
+temporary interruptions. Pages wait while a message draft or settings dialog is
+open, keeping unsent text and private
 form fields in the current page. Those fields are not saved to browser storage.
 
 Each user-visible successor includes `agent/release_notes.json`: a plain-language

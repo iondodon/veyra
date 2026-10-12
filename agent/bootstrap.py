@@ -572,6 +572,7 @@ def self_test() -> int:
         AGENT_DIR / "web_chat.py", AGENT_DIR / "chat.html", AGENT_DIR / "chat.css", AGENT_DIR / "chat.js",
         AGENT_DIR / "host_browser.py",
         AGENT_DIR / "release_notes.py", AGENT_DIR / "release_notes.json",
+        AGENT_DIR / "app_updates.js",
         ROOT / "supervisor/api_credentials.py",
     ]
     missing = [str(p) for p in required if not p.exists()]

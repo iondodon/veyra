@@ -19,7 +19,7 @@ class QuietWebLifecycleTests(unittest.TestCase):
             shutil.copytree(project / "supervisor", root / "supervisor",
                             ignore=shutil.ignore_patterns("__pycache__", "tests"))
             (root / "agent").mkdir()
-            for name in ("web_chat.py", "release_notes.py", "chat.html", "chat.css", "chat.js"):
+            for name in ("web_chat.py", "release_notes.py", "chat.html", "chat.css", "chat.js", "app_updates.js"):
                 shutil.copy2(project / "agent" / name, root / "agent" / name)
             (root / "agent/START").write_text(
                 "#!/bin/sh\nexec " + sys.executable + " \"$(dirname \"$0\")/fixture.py\" \"$@\"\n")
