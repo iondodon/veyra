@@ -1,5 +1,7 @@
 "use strict";
 const messages = document.querySelector("#messages");
+const conversation = document.querySelector("#conversation");
+const viewportStyle = document.documentElement.style;
 const input = document.querySelector("#message");
 const sendButton = document.querySelector("#send");
 const activity = document.querySelector("#activity");
@@ -21,6 +23,63 @@ let passwordSaving = false;
 let keySaving = false;
 let canSaveKeys = false;
 let pollComplete = Promise.resolve();
+let followingLatest = true;
+let touchingConversation = false;
+let touchEndTimer;
+let viewportFrame;
+let restingViewportHeight = window.innerHeight;
+let conversationHeight = conversation.clientHeight;
+
+function scrollToLatest() {
+  followingLatest = true;
+  conversation.scrollTop = conversation.scrollHeight;
+}
+
+conversation.addEventListener("scroll", () => {
+  // A keyboard or composer resize changes the scroll range, not the reader's intent.
+  if (conversation.clientHeight !== conversationHeight) return;
+  followingLatest = conversation.scrollHeight - conversation.clientHeight - conversation.scrollTop <= 32;
+}, {passive: true});
+conversation.addEventListener("touchstart", () => {
+  window.clearTimeout(touchEndTimer);
+  touchingConversation = true;
+}, {passive: true});
+for (const type of ["touchend", "touchcancel"]) conversation.addEventListener(type, () => {
+  touchEndTimer = window.setTimeout(() => { touchingConversation = false; }, 250);
+}, {passive: true});
+
+function syncViewport() {
+  viewportFrame = null;
+  const viewport = window.visualViewport;
+  // Let native pinch zoom magnify the page without reflowing the layout.
+  if (viewport && Math.abs(viewport.scale - 1) > .01) return;
+  const height = viewport ? viewport.height : window.innerHeight;
+  const editing = document.activeElement?.matches("input, textarea, select, [contenteditable='true']");
+  if (!editing && !document.body.classList.contains("keyboard-open")) restingViewportHeight = height;
+  const keyboardOpen = editing && restingViewportHeight - height > 120;
+  document.body.classList.toggle("keyboard-open", Boolean(keyboardOpen));
+  viewportStyle.setProperty("--chat-height", height + "px");
+  viewportStyle.setProperty("--chat-top", (viewport ? viewport.offsetTop : 0) + "px");
+}
+
+function scheduleViewport() {
+  if (viewportFrame == null) viewportFrame = window.requestAnimationFrame(syncViewport);
+}
+window.addEventListener("resize", scheduleViewport);
+window.visualViewport?.addEventListener("resize", scheduleViewport);
+window.visualViewport?.addEventListener("scroll", scheduleViewport);
+document.addEventListener("focusin", scheduleViewport);
+document.addEventListener("focusout", scheduleViewport);
+const composerFooter = document.querySelector("footer");
+const layoutObserver = new ResizeObserver(() => {
+  viewportStyle.setProperty("--composer-height", composerFooter.getBoundingClientRect().height + "px");
+  conversationHeight = conversation.clientHeight;
+  if (followingLatest && !touchingConversation) scrollToLatest();
+});
+layoutObserver.observe(conversation);
+layoutObserver.observe(composerFooter);
+syncViewport();
+
 window.VeyraUpdates.configure({poll: false,
   canReload: () => !input.value && !posting && !passwordSaving && !keySaving});
 window.addEventListener("veyra:update", refreshControls);
@@ -165,7 +224,6 @@ function appendMessage(event) {
 async function loadEvents() {
   try {
     let more;
-    const follow = window.innerHeight + window.scrollY >= document.body.scrollHeight - 160;
     do {
       const response = await fetch("/api/events?after=" + cursor, {cache: "no-store", headers: requestHeaders()});
       // The gateway stays online while the agent restarts. Keep polling here.
@@ -181,13 +239,16 @@ async function loadEvents() {
         more = true;
         continue;
       }
-      data.events.forEach(appendMessage);
+      if (data.events.length) {
+        const follow = followingLatest && !touchingConversation;
+        data.events.forEach(appendMessage);
+        if (follow) scrollToLatest();
+      }
       cursor = data.cursor;
       state = data.status;
       more = data.has_more;
     } while (more);
     connected = true;
-    if (follow) window.scrollTo(0, document.body.scrollHeight);
   } catch (_) { connected = false; }
   refreshControls();
 }
@@ -220,9 +281,9 @@ async function submit(text, approvalId = null) {
     state.busy = true;
     if (input.value.trim() === text) { input.value = ""; input.style.height = ""; }
     document.querySelectorAll("details").forEach(details => { details.open = false; });
-    window.scrollTo(0, document.body.scrollHeight);
+    scrollToLatest();
   } catch (error) { notice = error.message; }
-  finally { posting = false; refreshControls(); input.focus(); }
+  finally { posting = false; refreshControls(); input.focus({preventScroll: true}); }
 }
 
 document.querySelector("#composer").addEventListener("submit", event => {

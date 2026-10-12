@@ -11,3 +11,26 @@ dialog{width:min(440px,calc(100% - 32px));max-height:calc(100% - 32px);overflow:
 .shortcuts{justify-content:space-between}#model-status{font-size:11px;color:#6b6f60;overflow-wrap:anywhere;flex:1;min-width:0;margin-right:12px}.setup-actions{display:flex;align-items:center;flex-wrap:wrap;gap:9px;margin-top:18px}.setup-actions button,.setup-actions a{font:inherit;font-size:12px;border:1px solid #dcded3;border-radius:7px;padding:8px 12px;background:white;color:#343c31;text-decoration:none}.setup-actions [data-signin-link],.setup-actions [data-signin-button]{background:#343c31;color:white;border-color:#343c31}.setup-help{font-size:11px;color:#7c7e73;margin:10px 0 0}.password-form select{font:inherit;font-size:12px;width:100%;border:1px solid #dfe1d5;border-radius:7px;padding:10px;background:white;color:inherit}.password-form .key-help{font-size:11px;margin-top:9px;margin-bottom:0}.password-form #api-summary{font-size:11px;overflow-wrap:anywhere}.password-form #api-status{min-height:20px;color:#9d482b;margin:12px 0}.password-form a{color:#9d482b}#api-save{background:#343c31;color:white;border-color:#343c31}
 
 .menu a{display:block;text-align:left;border:0;border-radius:5px;background:white;color:#6b6f60;padding:6px 11px;font-size:11px;text-decoration:none}.menu a:hover{background:#f0f1e9}
+
+/* Keep the composer in the layout, outside the conversation's scroll area. */
+html.chat-app,.chat-page{height:100%;overflow:hidden;overscroll-behavior:none}
+.chat-page{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+#chat-shell{position:fixed;top:var(--chat-top,0px);left:0;right:0;height:var(--chat-height,100dvh);display:flex;flex-direction:column;overflow:hidden}
+#chat-shell>header{width:100%;height:calc(80px + env(safe-area-inset-top));padding-top:env(safe-area-inset-top);flex-shrink:0;margin:0 auto}
+.chat-page #conversation{flex:1;min-height:0;width:100%;margin:0 auto;padding:36px 32px 24px;overflow-y:auto;overflow-x:hidden;overscroll-behavior-y:contain;scrollbar-gutter:stable;-webkit-overflow-scrolling:touch}
+.chat-page footer{position:relative;flex-shrink:0;padding:12px 32px max(16px,env(safe-area-inset-bottom));background:#fafaf7}
+.chat-page .menu{max-height:max(60px,calc(var(--chat-height,100dvh) - var(--composer-height,240px) - 20px));overflow-y:auto;overscroll-behavior-y:contain}
+.chat-page #activity:empty{display:none}
+.chat-page textarea{min-width:0;font-size:16px;max-height:min(180px,calc(var(--chat-height,100dvh) * .3));overflow-y:auto}
+.chat-page .password-form input,.chat-page .password-form select{font-size:16px}
+.chat-page dialog{position:fixed;top:calc(var(--chat-top,0px) + var(--chat-height,100dvh) * .5);bottom:auto;margin:0 auto;transform:translateY(-50%);max-height:calc(var(--chat-height,100dvh) - 32px)}
+@media(max-width:600px),(max-height:500px) and (pointer:coarse){
+  #chat-shell>header{height:calc(56px + env(safe-area-inset-top));padding:env(safe-area-inset-top) max(16px,env(safe-area-inset-right)) 0 max(16px,env(safe-area-inset-left))}
+  .chat-page #conversation{padding:22px max(16px,env(safe-area-inset-right)) 16px max(16px,env(safe-area-inset-left))}
+  .chat-page footer{padding:10px max(16px,env(safe-area-inset-right)) max(12px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}
+  .chat-page .message{animation:none}
+  .chat-page .message.tool .body{max-height:none;overflow:visible}
+  .chat-page .password-reminder{padding:10px 12px;margin-bottom:10px}
+  .chat-page.keyboard-open #password-reminder,.chat-page.keyboard-open .hint{display:none}
+  .chat-page.keyboard-open footer{padding-bottom:10px}
+}

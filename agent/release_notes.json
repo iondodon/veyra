@@ -1,5 +1,5 @@
 {
-  "summary": "New features stay discoverable after Veyra updates.",
-  "instructions": "Open app pages automatically load the current version after every agent restart, including changes to content, layout, styling, controls, behavior, and other assets. Each version includes a chat message explaining what changed and how to use it, with links to new pages when available. If you are writing a message or editing settings, the page waits until you finish before updating.",
+  "summary": "Mobile typing and chat scrolling are more stable.",
+  "instructions": "Tap the message box to type. The chat fits above the on-screen keyboard and the larger input text avoids focus zoom on iPhone. Scroll up to read earlier messages; incoming replies leave your reading position alone. Return to the bottom to follow new messages. Long command output scrolls with the conversation on phones. Pinch zoom remains available.",
   "links": []
 }

@@ -1,14 +1,15 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="chat-app">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <title>Veyra</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/chat.css">
   <script src="/chat.js" defer></script>
 </head>
-<body>
+<body class="chat-page">
+  <div id="chat-shell">
   <header>
     <a class="brand" href="/" aria-label="Veyra home"><span class="mark">v</span>Veyra<span class="local">LOCAL</span></a>
     <span id="connection" role="status">Connecting…</span>
@@ -43,6 +44,7 @@
     </form>
     <p class="hint">Enter to send · Shift + Enter for a new line · Commands run only after your approval.</p>
   </footer>
+  </div>
   <dialog id="password-dialog" aria-labelledby="password-title">
     <form id="password-form" class="password-form">
       <h2 id="password-title">Change password</h2>
