@@ -36,3 +36,5 @@ html.chat-app,.chat-page{height:100%;overflow:hidden;overscroll-behavior:none}
   .chat-page.keyboard-open footer{padding-bottom:10px}
 }
 .dashboard-link{margin-left:auto;color:#6b6f60;font-size:12px;text-underline-offset:3px}
+
+.app-nav{display:flex;gap:16px;margin-left:auto}.app-nav .dashboard-link{margin-left:0}@media(max-width:600px){header{height:auto;min-height:65px;padding-top:12px;padding-bottom:12px;flex-wrap:wrap}.app-nav{gap:12px}}

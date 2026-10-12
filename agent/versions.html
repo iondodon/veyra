@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Version timeline · Veyra</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/chat.css">
+  <link rel="stylesheet" href="/versions.css">
+  <script src="/versions.js" defer></script>
+</head>
+<body>
+  <header>
+    <a class="brand" href="/" aria-label="Veyra chat"><span class="mark">v</span>Veyra<span class="local">LOCAL</span></a>
+    <nav aria-label="Navigation"><a href="/">Chat</a><a href="/dashboard">Dashboard</a><a href="/recovery">Recovery</a></nav>
+  </header>
+  <main>
+    <span class="eyebrow">HOW VEYRA EVOLVED</span>
+    <h1>Version timeline</h1>
+    <p class="intro">Committed versions leading to this running version, newest first. Uncommitted drafts are not versions. Merge side branches are omitted.</p>
+    <p class="recovery-note">Want to restore a working version? Open <a href="/recovery">Recovery</a>. This timeline is read-only.</p>
+    <p id="timeline-status" role="status">Loading version history…</p>
+    <ol id="timeline" aria-label="Version history"></ol>
+    <button id="load-more" type="button" hidden>Load older versions</button>
+  </main>
+</body>
+</html>

@@ -1,5 +1,5 @@
 {
-  "summary": "Simplified the README into a short guide to starting, connecting, using, and recovering Veyra.",
-  "instructions": "Read README.md for the quick start. Run ./supervisor/supervisor, open http://localhost:3000, and choose your service in Settings. Recovery remains at http://127.0.0.1:3001 on the Veyra computer.",
-  "links": []
+  "summary": "Added a read-only version timeline with commit dates, IDs, and expandable release notes.",
+  "instructions": "Choose Versions in the chat or dashboard navigation, or open the link below. The running version is marked at the top, followed by its committed first-parent history, newest first. Expand Commit ID & release notes to see the full ID and the public notes saved in that version. Notes can repeat from an earlier release, and older links may no longer exist. Use Load older versions if more than 20 entries are available. Uncommitted drafts are excluded. To restore a version, use the Recovery link; the timeline itself cannot change your system. The page uses the shared automatic update mechanism after agent restarts. Tested history ordering, pagination, missing notes, invalid links and cursors, HTTP routes, update injection, and UI rendering/retry behavior.",
+  "links": [{"label": "Open version timeline", "path": "/versions"}]
 }
