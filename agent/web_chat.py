@@ -1,6 +1,7 @@
 """Local web chat, with authenticated access from other devices."""
 
 import base64
+import hashlib
 from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ipaddress
@@ -17,6 +18,7 @@ from urllib.parse import parse_qs, urlsplit
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "supervisor"))
 from api_credentials import CredentialError, CredentialStore, KEY_NAMES
+from release_notes import load_notes
 
 
 EVENT_PREFIX = "VEYRA_EVENT "
@@ -28,6 +30,12 @@ ASSETS = Path(__file__).resolve().parent
 
 class WebChat:
     def __init__(self, root):
+        self.release_notes = load_notes(root)
+        self.assets = {filename: (ASSETS / filename).read_bytes()
+                       for filename in ("chat.html", "chat.js", "chat.css")}
+        self.ui_version = hashlib.sha256(b"".join(
+            filename.encode() + b"\0" + body for filename, body in self.assets.items()
+        )).hexdigest()
         directory = Path(root) / "state/chat"
         directory.mkdir(parents=True, exist_ok=True)
         directory.chmod(0o700)
@@ -55,6 +63,7 @@ class WebChat:
         with closing(sqlite3.connect(self.database)) as connection:
             self.session_after = connection.execute("SELECT COALESCE(MAX(id), 0) FROM events").fetchone()[0]
         self.session_id = secrets.token_hex(12)
+        self.release_announced = False
         self.configuration = {"provider": None, "model": None, "connected": False, "sign_in_url": None}
 
     def publish(self, text, *, role="system", kind="message", **fields):
@@ -74,7 +83,8 @@ class WebChat:
                 "cursor": rows[-1][0] if rows else max(after, self.session_after), "has_more": len(rows) == 200,
                 "status": {"ready": self.ready, "busy": self.busy, "approval_id": self.approval_id,
                            "password_is_default": self.network_password == DEFAULT_PASSWORD,
-                           "session_id": self.session_id, "configuration": dict(self.configuration)},
+                           "session_id": self.session_id, "ui_version": self.ui_version,
+                           "configuration": dict(self.configuration)},
             }
 
     def key_settings(self, local):
@@ -181,6 +191,11 @@ class WebChat:
             self.approval_id = None
         elif kind == "ready":
             self.ready = True
+            if self.release_notes and not self.release_announced:
+                self.publish("Ready to use: " + self.release_notes["summary"] + "\n\n" +
+                             self.release_notes["instructions"], role="assistant", kind="update",
+                             links=self.release_notes["links"])
+                self.release_announced = True
         elif kind == "done":
             self.busy = False
 
@@ -295,7 +310,10 @@ class WebChat:
                 if parsed.path not in assets:
                     return self.respond(404, {"error": "Page not found."})
                 filename, content_type = assets[parsed.path]
-                self.respond(200, (ASSETS / filename).read_bytes(), content_type)
+                body = chat.assets[filename]
+                if filename == "chat.html":
+                    body = body.replace(b"{{UI_VERSION}}", chat.ui_version.encode())
+                self.respond(200, body, content_type)
 
             def do_POST(self):
                 origin = self.headers.get("Origin")

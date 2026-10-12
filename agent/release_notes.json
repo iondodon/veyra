@@ -1,0 +1,5 @@
+{
+  "summary": "New features stay discoverable after Veyra updates.",
+  "instructions": "The chat now loads updated pages and controls automatically after a restart. Each version includes a message explaining what changed and how to use it, with links to new pages when available. If you are writing a message or editing settings, the page waits until you finish before updating.",
+  "links": []
+}

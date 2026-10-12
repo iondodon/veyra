@@ -21,6 +21,16 @@ let passwordSaving = false;
 let keySaving = false;
 let canSaveKeys = false;
 let pollComplete = Promise.resolve();
+const pageVersion = document.querySelector('meta[name="veyra-ui-version"]')?.content;
+let updatePending = false;
+
+function refreshPageIfReady() {
+  if (!updatePending) return false;
+  // Keep drafts and private form contents in this page until the owner finishes.
+  if (input.value || posting || passwordSaving || keySaving || document.querySelector("dialog[open]")) return false;
+  window.location.reload();
+  return true;
+}
 
 function requestHeaders(json = false) {
   return {...(json ? {"Content-Type": "application/json"} : {}),
@@ -34,7 +44,7 @@ function refreshControls() {
   document.querySelectorAll("[data-approval]").forEach(button => {
     button.disabled = !available || button.dataset.approval !== state.approval_id;
   });
-  activity.textContent = notice || (!connected ? "Reconnecting to Veyra…" : !state.ready ?
+  activity.textContent = (updatePending ? "An update is ready. Finish your draft or close settings to load it automatically." : notice) || (!connected ? "Reconnecting to Veyra…" : !state.ready ?
     "Veyra is starting…" : state.busy ? "Veyra is working…" : state.approval_id ?
     "Review the requested commands and approve or deny them." : "");
   connection.textContent = connected && state.ready ? "Connected" : connected ? "Starting" : "Reconnecting";
@@ -93,6 +103,20 @@ function appendMessage(event) {
   body.className = "body";
   appendText(body, event.text);
   article.append(label, body);
+  if (event.kind === "update" && Array.isArray(event.links)) {
+    const actions = document.createElement("div");
+    actions.className = "setup-actions";
+    for (const item of event.links) {
+      if (typeof item.path !== "string" || !item.path.startsWith("/")) continue;
+      const url = new URL(item.path, window.location.origin);
+      if (url.origin !== window.location.origin) continue;
+      const link = document.createElement("a");
+      link.href = url.href;
+      link.textContent = item.label;
+      actions.append(link);
+    }
+    article.append(actions);
+  }
   if (event.kind === "approval") {
     const actions = document.createElement("div");
     actions.className = "approval-actions";
@@ -151,9 +175,12 @@ async function loadEvents() {
     const follow = window.innerHeight + window.scrollY >= document.body.scrollHeight - 160;
     do {
       const response = await fetch("/api/events?after=" + cursor, {cache: "no-store", headers: requestHeaders()});
-      if (response.status === 503) { window.location.replace("/recovery"); return; }
+      // The gateway stays online while the agent restarts. Keep polling here.
+      if (response.status === 503) throw new Error("Veyra is restarting");
       if (!response.ok) throw new Error("Connection unavailable");
       const data = await response.json();
+      updatePending = Boolean(pageVersion && data.status.ui_version && pageVersion !== data.status.ui_version);
+      if (refreshPageIfReady()) return;
       if (state.session_id && state.session_id !== data.status.session_id) {
         messages.replaceChildren();
         cursor = 0;

@@ -151,6 +151,32 @@ for line in sys.stdin:
         self.assertFalse(later["status"]["ready"])
         self.assertEqual(restarted.snapshot(later["cursor"])["events"], [])
 
+    def test_version_handoff_survives_restart_and_is_announced_only_when_ready(self):
+        (self.root / "agent").mkdir()
+        notes = {"summary": "Added a dashboard.", "instructions": "Use Dashboard at the top to see activity.",
+                 "links": [{"label": "Open dashboard", "path": "/dashboard"}]}
+        (self.root / "agent/release_notes.json").write_text(json.dumps(notes))
+        for _ in range(2):
+            restarted = WebChat(self.root)
+            self.assertEqual(restarted.snapshot(0)["events"], [])
+            restarted.agent_event({"type": "ready"})
+            restarted.agent_event({"type": "ready"})
+            events = restarted.snapshot(0)["events"]
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["kind"], "update")
+            self.assertIn(notes["summary"], events[0]["text"])
+            self.assertIn(notes["instructions"], events[0]["text"])
+            self.assertEqual(events[0]["links"], notes["links"])
+
+    def test_ui_version_matches_served_page_and_assets_are_fixed_for_the_session(self):
+        version = self.chat.snapshot(0)["status"]["ui_version"]
+        status, page = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn(('name="veyra-ui-version" content="' + version + '"').encode(), page)
+        self.assertNotIn(b"{{UI_VERSION}}", page)
+        with patch("pathlib.Path.read_bytes", side_effect=AssertionError("Reading a changed working tree")):
+            self.assertEqual(self.request("GET", "/chat.js"), (200, self.chat.assets["chat.js"]))
+
     def test_routine_logs_are_hidden_and_errors_remain_visible(self):
         self.chat.publish("starting agent", kind="status")
         self.chat.publish("Something needs your attention", kind="error")

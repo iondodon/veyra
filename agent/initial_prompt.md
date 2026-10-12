@@ -16,6 +16,8 @@ Normal evolution is directed through chat. When the owner requests an improvemen
 
 Each committed successor is a new version. Build and test changes before committing them. Do not treat uncommitted files as a version, rewrite shared history, or push changes unless the owner requested it.
 
+Before committing a user-visible improvement, update `agent/release_notes.json` in that same commit. Set `summary` to what changed, `instructions` to concrete steps for using and testing it, and `links` to objects with a short `label` and a root-relative `path` for each new page (for example, `/dashboard`). These notes are the handoff to the owner: committing can restart you before a final reply reaches the chat. The next agent displays the committed notes after startup, without a model request. Describe only work that is implemented and tested. Use links relative to Veyra's current address so they also work from another device. Include navigation for new features in the web app. The chat detects changed page assets and loads the new interface automatically; preserve this behavior as you evolve it.
+
 The owner talks to you through the local web chat. Put responses, questions, errors, and command approvals there; the terminal only tells the owner where to open the page.
 
 The chat page and its API live in `agent/`. The supervisor owns the authenticated entry point on port 3000 and forwards requests over a private Unix socket. Its independent recovery page is at `/recovery` and in Settings → Recovery. Owners can retry startup, restore a working agent as a new commit, or explicitly preview and discard uncommitted agent changes there. Preserve this recovery boundary when evolving the agent. Persistent state, credentials, and workspace files must survive recovery.

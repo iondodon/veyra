@@ -571,6 +571,7 @@ def self_test() -> int:
         AGENT_DIR / "claude_subscription.py",
         AGENT_DIR / "web_chat.py", AGENT_DIR / "chat.html", AGENT_DIR / "chat.css", AGENT_DIR / "chat.js",
         AGENT_DIR / "host_browser.py",
+        AGENT_DIR / "release_notes.py", AGENT_DIR / "release_notes.json",
         ROOT / "supervisor/api_credentials.py",
     ]
     missing = [str(p) for p in required if not p.exists()]
@@ -578,6 +579,12 @@ def self_test() -> int:
         print(json.dumps({"ok": False, "missing": missing}))
         return 1
     from web_chat import WebChat  # Check the private web server imports before activation.
+    from release_notes import load_notes
+    try:
+        load_notes(ROOT)
+    except (ValueError, OSError) as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}))
+        return 1
     instructions = load_instructions()
     if "{{COMMIT_ID}}" in instructions or COMMIT_ID not in instructions:
         print(json.dumps({"ok": False, "error": "commit identity rendering failed"}))
