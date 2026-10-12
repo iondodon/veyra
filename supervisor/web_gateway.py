@@ -101,12 +101,30 @@ class WebGateway:
                 self.connection.settimeout(10)
 
             def local_client(self):
-                return ipaddress.ip_address(self.client_address[0]).is_loopback
+                local_hosts = (f"localhost:{self.server.server_port}", f"127.0.0.1:{self.server.server_port}")
+                return (ipaddress.ip_address(self.client_address[0]).is_loopback
+                        and self.headers.get("Host") in local_hosts)
 
             def allowed_host(self):
+                hosts = self.headers.get_all("Host", [])
+                if len(hosts) != 1:
+                    return False
+                host = hosts[0]
                 port = self.server.server_port
                 address = self.connection.getsockname()[0]
-                return self.headers.get("Host") in (f"localhost:{port}", f"127.0.0.1:{port}", f"{address}:{port}")
+                if host in (f"localhost:{port}", f"127.0.0.1:{port}", f"{address}:{port}"):
+                    return True
+                # NAT may translate both the address and port. Keep external hosts
+                # numeric so a hostname cannot be rebound through DNS to this server.
+                public_address, separator, public_port = host.partition(":")
+                if separator and (len(public_port) > 5 or not public_port.isascii() or not public_port.isdigit()
+                                  or not 0 < int(public_port) <= 65535):
+                    return False
+                try:
+                    public_ip = ipaddress.IPv4Address(public_address)
+                except ValueError:
+                    return False
+                return public_ip.is_global and not public_ip.is_multicast
 
             def authenticated(self):
                 if self.local_client():
@@ -131,7 +149,7 @@ class WebGateway:
 
             def authorize(self):
                 if not self.allowed_host():
-                    self.respond(403, {"error": "Open Veyra using this computer's IP address or localhost."})
+                    self.respond(403, {"error": "Open Veyra using localhost, this computer's IP address, or a public IPv4 address."})
                     return False
                 try:
                     authenticated = self.authenticated()

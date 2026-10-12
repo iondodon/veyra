@@ -77,6 +77,64 @@ class GatewayTests(unittest.TestCase):
             self.assertEqual(self.request("GET", "/recovery", headers={"Authorization": old})[0], 401)
             self.assertEqual(self.request("GET", "/recovery", headers={"Authorization": new})[0], 200)
 
+    def test_public_ipv4_supports_forwarded_ports_and_requires_password(self):
+        credential = "Basic " + base64.b64encode(b"veyra:veyra").decode()
+        for host in (f"8.8.8.8:{self.port}", "8.8.8.8:43123", "8.8.8.8"):
+            with self.subTest(host=host):
+                for path in ("/", "/chat.css", "/api/events", "/recovery", "/api/recovery"):
+                    self.assertEqual(self.request("GET", path, headers={"Host": host})[0], 401)
+                    self.assertEqual(self.request("GET", path, headers={
+                        "Host": host, "Authorization": credential})[0], 200)
+                self.assertEqual(self.request("GET", "/", headers={
+                    "Host": host, "Authorization": "Basic wrong-password"})[0], 401)
+
+    def test_public_access_preserves_remote_context_and_origin_checks(self):
+        host = f"8.8.8.8:{self.port}"
+        headers = {"Host": host, "Origin": f"http://{host}",
+                   "Authorization": "Basic " + base64.b64encode(b"veyra:veyra").decode(),
+                   "X-Veyra-Local": "1", "X-Forwarded-For": "127.0.0.1",
+                   "X-Forwarded-Host": f"localhost:{self.port}"}
+        status, body = self.request("GET", "/api/events", headers=headers)
+        self.assertEqual(status, 200)
+        self.assertFalse(json.loads(body)["status"]["local_client"])
+        status, body = self.request("GET", "/api/settings", headers=headers)
+        self.assertEqual(status, 200)
+        self.assertFalse(json.loads(body)["can_save_keys"])
+        self.assertEqual(self.request("POST", "/api/keys", {
+            "provider": "openai", "key": "sk-fixture-key"}, headers)[0], 403)
+        self.assertFalse(self.chat.credentials.path.exists())
+        for origin in ("", "null", "https://attacker.example", f"http://127.0.0.1:{self.port}"):
+            self.assertEqual(self.request("POST", "/api/messages", {"text": "blocked"},
+                             {**headers, "Origin": origin})[0], 403)
+        self.assertEqual(self.request("POST", "/api/messages", {"text": "blocked"},
+                         {**headers, "Authorization": ""})[0], 401)
+        self.assertEqual(self.request("POST", "/api/messages", {"text": "public hello"}, headers)[0], 202)
+        self.assertEqual(self.chat.inbox.get_nowait()["text"], "public hello")
+        self.gateway.detach()
+        self.assertEqual(self.request("GET", "/recovery", headers=headers)[0], 200)
+        self.assertEqual(self.request("GET", "/recovery", headers={"Host": host})[0], 401)
+
+    def test_public_access_rejects_invalid_hosts_and_duplicate_host_headers(self):
+        credential = "Basic " + base64.b64encode(b"veyra:veyra").decode()
+        for host in ("attacker.example", "8.8.8.8.attacker.example:3000", "user@8.8.8.8:3000",
+                     "8.8.8.8:0", "8.8.8.8:65536", "8.8.8.8:" + "9" * 5000, "8.8.8.8:", "8.8.8.8:not-a-port",
+                     "8.8.8.8:3000/path", "8.8.8.8?query", "8.8.8.8#fragment", "008.8.8.8:3000",
+                     "192.168.100.1:3000", "0.0.0.0:3000", "224.0.0.1:3000"):
+            with self.subTest(host=host):
+                self.assertEqual(self.request("GET", "/recovery", headers={
+                    "Host": host, "Authorization": credential})[0], 403)
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=4)
+        try:
+            connection.putrequest("GET", "/recovery", skip_host=True)
+            connection.putheader("Host", f"127.0.0.1:{self.port}")
+            connection.putheader("Host", f"8.8.8.8:{self.port}")
+            connection.endheaders()
+            response = connection.getresponse()
+            self.assertEqual(response.status, 403)
+            response.read()
+        finally:
+            connection.close()
+
     def test_recovery_rejects_foreign_origin_host_and_unconfirmed_actions(self):
         self.assertEqual(self.request("GET", "/recovery", headers={"Host": "attacker.example"})[0], 403)
         self.assertEqual(self.request("POST", "/api/recovery/action", {"action": "retry"},

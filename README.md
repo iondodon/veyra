@@ -42,8 +42,17 @@ The page reminds you to update the default password. Click **Change password**
 in the reminder or under **Settings** and choose a password of at least 8 characters.
 Your password is stored privately in `state/chat/messages.sqlite3`, survives
 restarts, and is never sent to the model or added to the conversation. Normal
-startup prints only the page address. Network access uses HTTP and is intended
-for your trusted private network.
+startup prints only the page address.
+
+Public IPv4 access also works at `http://PUBLIC_IP:3000` when your router forwards
+TCP port 3000 to the computer running Veyra. If the router maps a different external
+port, use that port in the URL. Numeric public addresses are accepted without saving
+the current public IP, so address changes do not require reconfiguring Veyra.
+Public access always requires the same network password, including when requests
+arrive through a local forwarder. Private API key entry and manual subscription
+sign-in links remain limited to localhost. Arbitrary domain names are rejected.
+The listener uses HTTP, which does not encrypt the login or conversation; use an
+encrypted tunnel for access across an untrusted network.
 
 The address remains available while the agent starts or changes commits. A
 small recovery page appears if the agent is unavailable. Each

@@ -1,5 +1,5 @@
 {
-  "summary": "More space above the message input.",
-  "instructions": "The Settings button and service/model information now have more space above the message box on phones and desktop.",
+  "summary": "Public IPv4 access is supported.",
+  "instructions": "Open http://YOUR_PUBLIC_IP:3000 after forwarding the router's port to the computer running Veyra, then sign in with your Veyra username and password. If you forwarded a different external port, use it in the address. The same address serves chat and Recovery. Private API key entry and subscription sign-in links remain available only through localhost. Network access currently uses HTTP without encryption.",
   "links": []
 }
