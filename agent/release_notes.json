@@ -1,6 +1,6 @@
 {
-  "summary": "The agent now serves port 3000 directly, independently of any lifecycle runner. Application requests no longer pass through a gateway.",
-  "instructions": "Open the app on port 3000 and test Chat and Settings. Remote access still requires your network password; private API key forms remain localhost-only. Pages retain automatic updates and draft protection. Local process recovery is separate at http://127.0.0.1:3001 on the host computer, with no login or application links.",
+  "summary": "Added a navigation regression test to keep agent pages from linking to the removed /recovery route. Main has no Dashboard or Versions pages; their navigation fix will be applied on local.",
+  "instructions": "Use Chat and Settings on port 3000. For process recovery, manually open http://127.0.0.1:3001 on the computer running Veyra, not on a remote device. Run the agent test suite to verify application navigation does not link to /recovery.",
   "links": [
     {
       "label": "Chat and Settings",
