@@ -1,10 +1,5 @@
 {
-  "summary": "Cleaned up the chat composer: consistent Image and Send buttons, clearer placeholder and helper text, and a readable auto-approve warning aligned with the message input.",
-  "instructions": "Open Chat to see the updated composer. Type a draft to check the focus styling and send-button states. In Settings, the auto-approve status now appears in an amber panel with a matching Turn off button when enabled; enabling auto-approve allows shell commands without confirmation. Desktop and mobile layout tests passed at 1905, 1024, 390, and 320px, along with Markdown security tests and all 157 Python tests. Draft handling, approval behavior, and automatic version updates are unchanged.",
-  "links": [
-    {
-      "label": "Chat",
-      "path": "/"
-    }
-  ]
+  "summary": "Added optional Conversation initiative: Veyra can start a brief, context-aware conversation instead of only responding to questions.",
+  "instructions": "In Chat, open Settings → Conversation initiative. Use Try a check-in now to request one tool-free model check-in; it works while paused and during quiet hours, but requires a connected service and no draft or pending work. Save Enabled to allow automatic check-ins, choose a 15-minute to 4-hour interval, and set quiet hours using the clock on Veyra’s computer (equal hours disables the quiet period). Check-ins are off by default. Automatic check-ins require visible Chat with no draft, open settings, work, or command approval, and stop nudging until you send another message. They use your selected service and recent chat context; API calls may incur charges. The model may skip a check-in if it has nothing useful to add. Save Paused to stop future automatic check-ins and suppress an in-flight check-in; an already-started model call may still incur usage. Preferences survive restarts. Scheduling, no-tool execution, authentication boundaries, desktop/mobile controls, drafts, and deferred updates were tested without live model calls.",
+  "links": [{"label": "Chat → Settings → Conversation initiative", "path": "/"}]
 }

@@ -37,6 +37,16 @@ class WebChatTests(unittest.TestCase):
         self.assertLess(page.index(b'/chat-markdown.js'), page.index(b'/chat.js'))
         self.assertIn(b'/app-updates.js', page)
 
+    def test_initiative_endpoints_follow_auth_and_origin_boundary(self):
+        payload = {'enabled':True, 'interval_minutes':30, 'quiet_start':22, 'quiet_end':8}
+        self.assertEqual(self.request('POST', '/api/initiative', payload, {'Origin':'http://evil.example'})[0], 403)
+        self.assertEqual(self.request('POST', '/api/initiative', payload, {'Host':'8.8.8.8:3000', 'Origin':'http://8.8.8.8:3000'})[0], 401)
+        status, body = self.request('POST', '/api/initiative', payload)
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)['initiative']['enabled'])
+        self.assertEqual(self.request('POST', '/api/check-in', {'manual':True, 'available':True})[0], 200)
+        self.assertEqual(self.request('POST', '/api/initiative', {'enabled':True})[0], 400)
+
     def stop_agents(self):
         self.chat.detach()
         for process in self.processes:

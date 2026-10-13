@@ -544,6 +544,26 @@ class Conversation:
             response = self.provider.create_response(**kwargs)
         self.show_response(response)
 
+    def check_in(self, context):
+        """A separate, tool-free model call, never an approval or execution turn."""
+        with self.lock:
+            if self.provider is None or self.pending:
+                return
+            instructions = (self.instructions + "\nThis is an optional conversational check-in, not an owner request. "
+                "Write at most 2-3 brief sentences: a relevant follow-up, useful idea, or friendly question. "
+                "Use only the supplied chat context; do not claim background work, observations, feelings, "
+                "or human identity. Do not pressure the owner to reply, imply emotional dependence, "
+                "repeat an unanswered check-in, or propose running commands. If there is nothing useful "
+                "to add, output exactly SKIP. No tools or actions are permitted.")
+            response = self.provider.create_response(instructions=instructions,
+                input=list(context or []) + [{"role": "user", "content":
+                    "Internal scheduler: consider starting a short conversation now. This is not a new owner message."}],
+                tools=[])
+            # Ignore any unsolicited tool calls, even if a provider returns them.
+            text = response.output_text.strip()
+            if text and text != "SKIP":
+                send(text, kind="checkin")
+
     def show_response(self, response):
         if self.provider.name == "claude" and self.provider.model != self.reported_model:
             self.reported_model = self.provider.model
@@ -570,7 +590,7 @@ def self_test() -> int:
         AGENT_DIR / "providers.py", AGENT_DIR / "chatgpt_auth.py", AGENT_DIR / "chatgpt_provider.py",
         AGENT_DIR / "claude_subscription.py",
         AGENT_DIR / "web_chat.py", AGENT_DIR / "chat.html", AGENT_DIR / "chat.css", AGENT_DIR / "chat.js",
-        AGENT_DIR / "host_browser.py",
+        AGENT_DIR / "host_browser.py", AGENT_DIR / "initiative.py",
         AGENT_DIR / "release_notes.py", AGENT_DIR / "release_notes.json",
         AGENT_DIR / "app_updates.js",
         AGENT_DIR / "api_credentials.py",
@@ -628,7 +648,10 @@ def run_conversation(lines) -> int:
     for line in lines:
         try:
             message = json.loads(line)
-            conversation.handle(message["text"], message.get("approval_id"), message.get("images"), message.get("context"))
+            if message.get("initiative"):
+                conversation.check_in(message.get("context"))
+            else:
+                conversation.handle(message["text"], message.get("approval_id"), message.get("images"), message.get("context"))
         except (ChatGPTError, ProviderConfigError) as exc:
             conversation.report_error(exc)
         except Exception as exc:
