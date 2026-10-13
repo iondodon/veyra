@@ -23,6 +23,7 @@ const path = require('node:path');
       await page.waitForFunction(() => !document.querySelector('#message').disabled);
       await page.locator('#message').fill('Unsent draft');
       assert.equal(await page.locator('[id^="initiative-"]').count(),0);
+      assert.equal(await page.locator('a[href="/tasks"]').count(),0);
       // Accelerate all timers to prove old enabled payloads cannot trigger a request.
       await page.clock.install();
       await page.clock.fastForward(120000);
@@ -31,6 +32,6 @@ const path = require('node:path');
       assert.deepEqual(errors,[]);
       await page.close();
     }
-    console.log('Desktop/mobile chat runtime passed: no initiative controls or requests, drafts intact.');
+    console.log('Desktop/mobile chat runtime passed: no initiative controls or requests, no Tasks navigation, drafts intact.');
   } finally {await browser.close();}
 })().catch(error => {console.error(error);process.exitCode=1;});

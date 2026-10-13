@@ -122,14 +122,13 @@ for line in sys.stdin:
     def test_auto_approval_new_requests_only_and_one_delivery(self):
         self.prepare_auto_approval()
         self.assertEqual(self.toggle_auto(True)[0], 200)
-        self.chat.progress.start('Check')
         self.chat.busy = True
         self.chat.agent_event({'type': 'approval', 'approval_id': 'a', 'text': '$ printf hello'})
         self.assertTrue(self.chat.inbox.empty())
         self.chat.agent_event({'type': 'done'})
         message = self.chat.inbox.get_nowait()
         self.assertEqual((message['text'], message['approval_id']), ('/approve', 'a'))
-        self.assertTrue(any(e['kind'] == 'auto_approval' for e in self.chat.progress.tasks[0]['events']))
+        self.assertTrue(any('Automatically approving' in e['text'] for e in self.chat.snapshot(0)['events']))
         self.chat.agent_event({'type': 'done'})
         self.assertTrue(self.chat.inbox.empty())
         self.chat.agent_event({'type': 'clear_approval'})

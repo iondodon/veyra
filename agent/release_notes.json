@@ -1,6 +1,6 @@
 {
-  "summary": "Removed Conversation initiative and all automatic and manual check-ins.",
-  "instructions": "Open Chat: Conversation initiative is no longer in Settings, and Veyra will not start scheduled conversations or make check-in model requests, even if you previously enabled the feature. Existing chat history, service selection, and credentials are unchanged. Older open pages update through the shared update monitor after restart; unsent drafts and private forms are preserved until you finish editing. Tested with 158 Python tests, the self-test, JavaScript syntax checks, desktop/mobile chat runtime checks, and full-width scrolling/layout checks at four screen widths.",
+  "summary": "Removed the Tasks feature, including its page, navigation, API, and background progress tracking.",
+  "instructions": "Open Chat, Dashboard, or Versions: Tasks is no longer in navigation. Old Tasks bookmarks and API requests return not found. Chat messages, command approvals, auto-approval, and existing history still work. Open pages receive the new version through the shared update monitor after restart, without discarding unfinished drafts or private forms. Tested with 156 Python tests, the self-test, desktop/mobile chat runtime checks, four-width layout checks, and Markdown rendering tests.",
   "links": [
     {
       "label": "Chat",
