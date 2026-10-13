@@ -37,6 +37,7 @@ class WebChat:
         self.release_notes = load_notes(root)
         self.assets = {filename: (ASSETS / filename).read_bytes()
                        for filename in ("chat.html", "chat.js", "chat.css", "app_updates.js",
+                                        "marked.js", "purify.js", "chat-markdown.js",
                                         "dashboard.html", "dashboard.js", "dashboard.css",
                                         "versions.html", "versions.js", "versions.css",
                                         "tasks.html", "tasks.js", "tasks.css")}
@@ -416,6 +417,9 @@ class WebChat:
                     "/dashboard": ("dashboard.html", "text/html; charset=utf-8"),
                     "/dashboard.js": ("dashboard.js", "text/javascript; charset=utf-8"),
                     "/dashboard.css": ("dashboard.css", "text/css; charset=utf-8"),
+                    "/marked.js": ("marked.js", "text/javascript; charset=utf-8"),
+                    "/purify.js": ("purify.js", "text/javascript; charset=utf-8"),
+                    "/chat-markdown.js": ("chat-markdown.js", "text/javascript; charset=utf-8"),
                     "/chat.js": ("chat.js", "text/javascript; charset=utf-8"),
                     "/app-updates.js": ("app_updates.js", "text/javascript; charset=utf-8"),
                 }

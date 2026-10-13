@@ -1,14 +1,10 @@
 {
-  "summary": "Removed broken recovery links from Dashboard and Versions. Recovery directions now specify the host-local address. Local features are rebased onto the updated main, with published history preserved.",
-  "instructions": "Open Dashboard and Versions from Chat and verify navigation no longer offers the removed /recovery route. Both pages explain that process recovery is at http://127.0.0.1:3001, opened manually on the computer running Veyra, not on a remote device. The agent app remains on port 3000; automatic updates and draft protection are unchanged. The full agent test suite and changed JavaScript syntax checks passed.",
+  "summary": "Chat now renders assistant replies as sanitized Markdown, including headings, lists, emphasis, quotes, tables, links, and code blocks. User messages, command approvals, and command output remain plain text.",
+  "instructions": "Open Chat and ask for a heading, a bulleted list, and a fenced code example. Earlier assistant replies also render when the conversation loads. External HTTP(S) links open safely in a new tab; local links stay in Veyra. Scripts, embedded forms, unsafe links, and remote Markdown images are blocked. Code blocks and tables scroll horizontally on narrow screens. Draft protection and automatic version updates are unchanged. Formatting/security tests, JavaScript syntax checks, and all 157 Python tests passed.",
   "links": [
     {
-      "label": "Dashboard",
-      "path": "/dashboard"
-    },
-    {
-      "label": "Versions",
-      "path": "/versions"
+      "label": "Chat",
+      "path": "/"
     }
   ]
 }

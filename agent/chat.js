@@ -154,7 +154,7 @@ function refreshControls() {
 }
 
 function appendText(element, text) {
-  // Treat model and command output as text. Only http(s) URLs become links.
+  // Plain-text messages and command output: only http(s) URLs become links.
   const pattern = /https?:\/\/[^\s<>"']+/g;
   let end = 0;
   for (const match of text.matchAll(pattern)) {
@@ -180,7 +180,11 @@ function appendMessage(event) {
   label.textContent = {user: "You", assistant: "Veyra", system: "Veyra", tool: "Command output"}[event.role] || "Veyra";
   const body = document.createElement("div");
   body.className = "body";
-  appendText(body, event.text);
+  if (event.role === "assistant" && event.kind !== "approval") {
+    window.VeyraMarkdown.render(body, event.text);
+  } else {
+    appendText(body, event.text);
+  }
   article.append(label, body);
   for (const image of event.images || []) {
     if (!/^data:image\/(png|jpeg|webp|gif);base64,/.test(image.data_url)) continue;

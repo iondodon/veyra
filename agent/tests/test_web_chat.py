@@ -25,6 +25,18 @@ class WebChatTests(unittest.TestCase):
         self.processes = []
         self.addCleanup(self.stop_agents)
 
+    def test_markdown_assets_are_served_and_versioned(self):
+        status, page = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        for filename in ("marked.js", "purify.js", "chat-markdown.js"):
+            self.assertIn(f'src="/{filename}"'.encode(), page)
+            status, content = self.request("GET", "/" + filename)
+            self.assertEqual(status, 200)
+            self.assertEqual(content, self.chat.assets[filename])
+        self.assertLess(page.index(b'/marked.js'), page.index(b'/chat-markdown.js'))
+        self.assertLess(page.index(b'/chat-markdown.js'), page.index(b'/chat.js'))
+        self.assertIn(b'/app-updates.js', page)
+
     def stop_agents(self):
         self.chat.detach()
         for process in self.processes:
