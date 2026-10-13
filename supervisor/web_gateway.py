@@ -19,6 +19,8 @@ from recovery import Recovery, RecoveryError
 
 WEB_PORT = int(os.environ.get("VEYRA_WEB_PORT", "3000"))
 WEB_URL = f"http://localhost:{WEB_PORT}"
+# Transport-wide bound; application-specific validation belongs to the agent.
+MAX_REQUEST_BYTES = 29 * 1024 * 1024
 ASSETS = Path(__file__).resolve().parent
 
 
@@ -145,7 +147,8 @@ class WebGateway:
                 if status == 401:
                     self.send_header("WWW-Authenticate", 'Basic realm="Veyra", charset="UTF-8"')
                 self.end_headers()
-                self.wfile.write(body)
+                if self.command != "HEAD":
+                    self.wfile.write(body)
 
             def authorize(self):
                 if not self.allowed_host():
@@ -184,6 +187,8 @@ class WebGateway:
                 path = urlsplit(self.path).path
                 if path == "/api/recovery":
                     return self.respond(200, gateway.recovery.status(gateway.ready(), gateway.active_revision))
+                if path.startswith("/api/recovery/"):
+                    return self.respond(404, {"error": "Recovery route not found."})
                 assets = {"/recovery": ("recovery.html", "text/html; charset=utf-8"),
                           "/recovery.css": ("recovery.css", "text/css; charset=utf-8"),
                           "/recovery.js": ("recovery.js", "text/javascript; charset=utf-8")}
@@ -193,36 +198,47 @@ class WebGateway:
                     return self.asset("recovery.html", "text/html; charset=utf-8")
                 return self.proxy()
 
+            do_HEAD = do_GET
+
             def do_POST(self):
                 if not self.authorize():
                     return
                 if self.headers.get("Origin") != "http://" + self.headers.get("Host", ""):
                     return self.respond(403, {"error": "Send requests from the Veyra page."})
-                if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+                path = urlsplit(self.path).path
+                recovery_route = path == "/api/recovery" or path.startswith("/api/recovery/")
+                if recovery_route and self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                     return self.respond(415, {"error": "Send JSON."})
+                if self.headers.get("Transfer-Encoding"):
+                    return self.respond(400, {"error": "Use Content-Length."})
                 try:
                     length = int(self.headers.get("Content-Length", "0"))
-                    if not 0 < length <= 100000:
+                    if not 0 <= length <= (100000 if recovery_route else MAX_REQUEST_BYTES):
                         return self.respond(413, {"error": "Message is too large."})
                     body = self.rfile.read(length)
                     if len(body) != length:
                         return self.respond(400, {"error": "Incomplete message."})
                 except (ValueError, OSError):
                     return self.respond(400, {"error": "Invalid message."})
-                if self.path in ("/api/recovery/preview", "/api/recovery/action"):
+                if recovery_route:
+                    if self.command != "POST" or path not in ("/api/recovery/preview", "/api/recovery/action"):
+                        return self.respond(404, {"error": "Recovery route not found."})
                     try:
                         payload = json.loads(body)
                         if not isinstance(payload, dict):
                             raise RecoveryError("Choose a recovery action.")
-                        if self.path.endswith("/preview"):
+                        if path.endswith("/preview"):
                             return self.respond(200, gateway.recovery.preview(payload.get("action")))
                         gateway.recovery.request(payload)
                         return self.respond(202, {"ok": True})
                     except (ValueError, RecoveryError, OSError, subprocess.TimeoutExpired) as exc:
                         return self.respond(409, {"error": str(exc)})
-                if self.path not in ("/api/messages", "/api/keys", "/api/password"):
-                    return self.respond(404, {"error": "Page not found."})
                 return self.proxy(body)
+
+            do_PUT = do_POST
+            do_PATCH = do_POST
+            do_DELETE = do_POST
+            do_OPTIONS = do_POST
 
         class Server(ThreadingHTTPServer):
             daemon_threads = True

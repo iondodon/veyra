@@ -66,6 +66,39 @@ class GatewayTests(unittest.TestCase):
                              {"Authorization": credential, "X-Veyra-Local": "1"})[0], 403)
             self.assertFalse(self.chat.credentials.path.exists())
 
+    def test_application_routes_are_not_a_supervisor_allowlist(self):
+        for method in ("POST", "PUT", "PATCH", "DELETE", "OPTIONS"):
+            with self.subTest(method=method), patch.object(self.gateway, "forward", return_value=(201, b"agent response", "text/plain")) as forward:
+                status, body = self.request(method, "/new-feature?mode=1", {"value": "new"}, {"Content-Type": "text/plain"})
+                self.assertEqual((status, body), (201, b"agent response"))
+                self.assertEqual(forward.call_args.args[:2], (method, "/new-feature?mode=1"))
+                forward.reset_mock()
+                self.assertEqual(self.request(method, "/new-feature", {}, {"Origin": "http://evil.test"})[0], 403)
+                forward.assert_not_called()
+        with patch.object(self.gateway, "forward", return_value=(404, b"agent 404", "text/plain")):
+            self.assertEqual(self.request("POST", "/unknown", {}) , (404, b"agent 404"))
+        self.gateway.detach()
+        self.assertEqual(self.request("POST", "/new-feature", {})[0], 503)
+
+    def test_recovery_namespace_is_not_forwarded(self):
+        with patch.object(self.gateway, "forward") as forward:
+            self.assertEqual(self.request("POST", "/api/recovery/unknown", {})[0], 404)
+            self.assertEqual(self.request("PUT", "/api/recovery/action", {})[0], 404)
+            with patch.object(self.gateway.recovery, "preview", return_value={"ok": True}):
+                self.assertEqual(self.request("POST", "/api/recovery/preview?test=1", {"action": "retry"})[0], 200)
+            self.assertEqual(self.request("GET", "/api/recovery/unknown")[0], 404)
+            forward.assert_not_called()
+
+    def test_transport_limit_is_not_application_route_specific(self):
+        with patch.object(self.gateway, "forward", return_value=(200, b"ok", "text/plain")) as forward:
+            self.assertEqual(self.request("POST", "/future-upload", {"data": "x" * 100001})[0], 200)
+            forward.assert_called_once()
+            forward.reset_mock()
+            self.assertEqual(self.request("POST", "/future-upload", {}, {"Content-Length": str(29 * 1024 * 1024 + 1)})[0], 413)
+            self.assertEqual(self.request("POST", "/future-upload", {}, {"Transfer-Encoding": "chunked"})[0], 400)
+            self.assertEqual(self.request("POST", "/api/recovery/action", {}, {"Content-Length": "100001"})[0], 413)
+            forward.assert_not_called()
+
     def test_changed_password_is_used_when_agent_is_offline(self):
         handler = self.gateway.server.RequestHandlerClass
         old = "Basic " + base64.b64encode(b"veyra:veyra").decode()
