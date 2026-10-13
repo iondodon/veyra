@@ -23,6 +23,7 @@ let notice = "";
 let authorization = "";
 let passwordSaving = false;
 let keySaving = false;
+let approvalSaving = false;
 let canSaveKeys = false;
 let pollComplete = Promise.resolve();
 let followingLatest = true;
@@ -83,7 +84,7 @@ layoutObserver.observe(composerFooter);
 syncViewport();
 
 window.VeyraUpdates.configure({poll: false,
-  canReload: () => !input.value && !attachments.length && !readingImages && !posting && !passwordSaving && !keySaving});
+  canReload: () => !input.value && !attachments.length && !readingImages && !posting && !passwordSaving && !keySaving && !approvalSaving});
 window.addEventListener("veyra:update", refreshControls);
 
 function requestHeaders(json = false) {
@@ -91,7 +92,30 @@ function requestHeaders(json = false) {
     ...(authorization ? {Authorization: authorization} : {})};
 }
 
+async function setAutoApprove(enabled) {
+  if (enabled && !window.confirm("Allow ALL new shell command requests to run without review? Commands can delete files, install software, or change this computer. This lasts until restart, service disconnect/change, or you turn it off. Existing pending approvals still require a decision.")) return;
+  approvalSaving = true;
+  refreshControls();
+  try {
+    const response = await fetch("/api/auto-approve", {method: "POST", headers: requestHeaders(true),
+      body: JSON.stringify({enabled, session_id: state.session_id})});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Could not change auto-approval.");
+    state.auto_approve = result.auto_approve;
+    notice = "";
+  } catch (error) { notice = error.message; }
+  finally { approvalSaving = false; refreshControls(); }
+}
+document.querySelector("#auto-approve-toggle").addEventListener("click", () => setAutoApprove(!state.auto_approve));
+document.querySelector("#auto-approve-off").addEventListener("click", () => setAutoApprove(false));
+
 function refreshControls() {
+  const toggle = document.querySelector("#auto-approve-toggle");
+  toggle.textContent = "Auto-approve commands: " + (state.auto_approve ? "On" : "Off");
+  toggle.setAttribute("aria-pressed", String(Boolean(state.auto_approve)));
+  toggle.disabled = !connected || !state.ready || approvalSaving || (!state.auto_approve && (!state.configuration?.connected || Boolean(state.approval_id)));
+  document.querySelector("#auto-approve-warning").hidden = !state.auto_approve;
+  document.querySelector("#auto-approve-off").disabled = !connected || !state.ready || approvalSaving;
   const available = connected && state.ready && !state.busy && !posting && !passwordSaving && !keySaving;
   document.querySelectorAll("#image-previews button").forEach(button => { button.disabled = posting; });
   sendButton.disabled = !available || readingImages || (!input.value.trim() && !attachments.length);

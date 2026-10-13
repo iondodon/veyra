@@ -72,6 +72,62 @@ for line in sys.stdin:
         self.wait_for(lambda: self.chat.ready)
         return process
 
+    def prepare_auto_approval(self):
+        self.chat.agent_event({"type": "ready"})
+        self.chat.agent_event({"type": "configuration", "provider": "chatgpt", "connected": True})
+
+    def toggle_auto(self, enabled):
+        return self.request("POST", "/api/auto-approve", {"enabled": enabled, "session_id": self.chat.session_id})
+
+    def test_auto_approval_default_validation_and_http_protection(self):
+        self.prepare_auto_approval()
+        self.assertFalse(self.chat.snapshot(0)['status']['auto_approve'])
+        self.assertEqual(self.request('POST', '/api/auto-approve', {'enabled': 'yes'})[0], 400)
+        self.assertEqual(self.request('POST', '/api/auto-approve', {'enabled': True, 'session_id': 'old'})[0], 409)
+        self.assertEqual(self.request('POST', '/api/auto-approve', {}, {'Origin': 'http://evil.test'})[0], 403)
+        self.assertEqual(self.toggle_auto(True)[0], 200)
+        self.chat.detach()
+        self.assertFalse(self.chat.auto_approve)
+        self.chat.begin_session()
+        self.assertFalse(self.chat.auto_approve)
+
+    def test_auto_approval_new_requests_only_and_one_delivery(self):
+        self.prepare_auto_approval()
+        self.assertEqual(self.toggle_auto(True)[0], 200)
+        self.chat.progress.start('Check')
+        self.chat.busy = True
+        self.chat.agent_event({'type': 'approval', 'approval_id': 'a', 'text': '$ printf hello'})
+        self.assertTrue(self.chat.inbox.empty())
+        self.chat.agent_event({'type': 'done'})
+        message = self.chat.inbox.get_nowait()
+        self.assertEqual((message['text'], message['approval_id']), ('/approve', 'a'))
+        self.assertTrue(any(e['kind'] == 'auto_approval' for e in self.chat.progress.tasks[0]['events']))
+        self.chat.agent_event({'type': 'done'})
+        self.assertTrue(self.chat.inbox.empty())
+        self.chat.agent_event({'type': 'clear_approval'})
+        self.toggle_auto(False)
+        self.chat.agent_event({'type': 'approval', 'approval_id': 'b', 'text': '$ test'})
+        self.chat.agent_event({'type': 'done'})
+        self.assertTrue(self.chat.inbox.empty())
+        self.assertEqual(self.toggle_auto(True)[0], 409)
+
+    def test_turn_off_before_done_and_disconnect_cancel_auto(self):
+        self.prepare_auto_approval()
+        self.toggle_auto(True)
+        self.chat.agent_event({'type': 'approval', 'approval_id': 'a', 'text': '$ test'})
+        self.assertEqual(self.toggle_auto(False)[0], 200)
+        self.chat.agent_event({'type': 'done'})
+        self.assertTrue(self.chat.inbox.empty())
+        self.chat.agent_event({'type': 'clear_approval'})
+        self.toggle_auto(True)
+        self.chat.agent_event({'type': 'configuration', 'connected': False})
+        self.assertFalse(self.chat.auto_approve)
+        self.assertEqual(self.toggle_auto(True)[0], 409)
+        self.prepare_auto_approval()
+        self.toggle_auto(True)
+        self.chat.agent_event({'type': 'configuration', 'provider': 'claude', 'connected': True})
+        self.assertFalse(self.chat.auto_approve)
+
     def test_page_available_before_agent_and_messages_round_trip(self):
         status, html = self.request("GET", "/")
         self.assertEqual(status, 200)

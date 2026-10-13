@@ -1,14 +1,14 @@
 {
-  "summary": "Added a live Tasks page showing request progress, command approvals, execution results and replies.",
-  "instructions": "Open Tasks in the navigation, or /tasks, then send a request in Chat. The page updates every second while visible. It shows Working, Awaiting approval, Finished or Interrupted alongside timestamped command/output/reply events. Follow Open chat to approve or deny commands; approvals still require your explicit action. Finished means the request ended, not that all commands or tests passed: inspect the output and final reply. The panel retains the last 10 requests and up to 100 events per request in the current runtime session; previews are limited to 8,000 characters per event and 1,000 for request text, with full messages in chat. It clears on restart and does not change saved chat history or the 50-message context window. All 148 automated tests, JavaScript syntax validation and startup self-test passed; no live model or visual browser test was performed.",
+  "summary": "Added a session-only Auto-approve commands toggle in Chat Settings, with confirmation and a visible Turn off control.",
+  "instructions": "Open Chat \u2192 Settings \u2192 Auto-approve commands: Off after connecting a service. Confirm the warning to allow all new shell command requests to run without individual approval. This can delete files or change this computer; enable only when you trust the task. Resolve existing pending approvals manually before enabling. Send a harmless request such as \u201cRun printf hello\u201d and check the command, automatic approval notice and output in Chat and Tasks. Use Turn off in the visible warning or the Settings toggle to restore manual approval. Turning it off does not stop commands already approved or running. Auto-approve resets to Off on agent restart, service disconnect or service change; it is not stored in browser storage or persisted across sessions. The normal approval path, authenticated same-origin controls and supervisor recovery boundary are preserved. All 151 automated tests, JavaScript syntax validation and startup self-test passed. No live model or visual browser test was performed.",
   "links": [
+    {
+      "label": "Chat and Settings",
+      "path": "/"
+    },
     {
       "label": "Task progress",
       "path": "/tasks"
-    },
-    {
-      "label": "Open chat",
-      "path": "/"
     }
   ]
 }

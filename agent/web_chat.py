@@ -72,6 +72,8 @@ class WebChat:
         # Reload every open app page after any restart, regardless of which files changed.
         self.ui_version = self.session_id
         self.release_announced = False
+        self.auto_approve = False
+        self.auto_approval_id = None
         self.progress = TaskProgress()
         self.configuration = {"provider": None, "model": None, "connected": False, "sign_in_url": None}
 
@@ -110,11 +112,25 @@ class WebChat:
             return {
                 "events": [event for event in events if event.get("kind") != "status"],
                 "cursor": rows[-1][0] if rows else max(after, self.session_after), "has_more": len(rows) == 200,
-                "status": {"ready": self.ready, "busy": self.busy, "approval_id": self.approval_id,
+                "status": {"auto_approve": self.auto_approve, "ready": self.ready, "busy": self.busy, "approval_id": self.approval_id,
                            "password_is_default": self.network_password == DEFAULT_PASSWORD,
                            "session_id": self.session_id, "ui_version": self.ui_version,
                            "configuration": dict(self.configuration)},
             }
+
+    def set_auto_approve(self, payload):
+        if not isinstance(payload, dict) or type(payload.get("enabled")) is not bool:
+            return 400, {"error": "Choose whether auto-approval is enabled."}
+        with self.lock:
+            if payload.get("session_id") != self.session_id or not self.ready:
+                return 409, {"error": "Veyra restarted. Refresh before changing auto-approval."}
+            enabled = payload["enabled"]
+            if enabled and (not self.configuration.get("connected") or self.approval_id):
+                return 409, {"error": "Connect a service and resolve pending approvals before enabling auto-approval."}
+            self.auto_approve = enabled
+            self.auto_approval_id = None
+            self.publish("Auto-approve commands " + ("enabled for this session. New shell requests will run without confirmation." if enabled else "disabled. Commands already running are not stopped."), kind="notice")
+            return 200, {"ok": True, "auto_approve": enabled}
 
     def key_settings(self, local):
         env = self.credentials.environment()
@@ -170,6 +186,8 @@ class WebChat:
 
     def detach(self):
         with self.lock:
+            self.auto_approve = False
+            self.auto_approval_id = None
             self.progress.interrupt()
             if self.approval_id:
                 self.publish("The pending command request was cancelled because Veyra restarted.")
@@ -214,15 +232,20 @@ class WebChat:
                          kind=event.get("kind", "message"),
                          **({"provider": event.get("provider")} if event.get("kind") == "key_request" else {}))
         elif kind == "configuration":
+            if not event.get("connected", self.configuration.get("connected")) or event.get("provider", self.configuration.get("provider")) != self.configuration.get("provider"):
+                self.auto_approve = False
+                self.auto_approval_id = None
             self.configuration.update({field: event[field] for field in self.configuration if field in event})
         elif kind == "sign_in":
             if event.get("provider", self.configuration["provider"]) == self.configuration["provider"]:
                 self.configuration["sign_in_url"] = event.get("url")
         elif kind == "approval":
             self.approval_id = event["approval_id"]
+            self.auto_approval_id = self.approval_id if self.auto_approve else None
             self.publish(event["text"], role="assistant", kind="approval", approval_id=self.approval_id)
         elif kind == "clear_approval":
             self.approval_id = None
+            self.auto_approval_id = None
         elif kind == "ready":
             self.ready = True
             if self.release_notes and not self.release_announced:
@@ -232,6 +255,12 @@ class WebChat:
                 self.release_announced = True
         elif kind == "done":
             self.busy = False
+            if self.auto_approve and self.auto_approval_id and self.auto_approval_id == self.approval_id:
+                approval_id = self.auto_approval_id
+                self.auto_approval_id = None
+                self.publish("Automatically approving the command request because Auto-approve is on.", kind="notice")
+                self.progress.add('auto_approval', 'Automatically approved by the session setting')
+                self.submit({"text": "/approve", "approval_id": approval_id})
 
     def submit(self, payload):
         if not isinstance(payload, dict):
@@ -402,7 +431,7 @@ class WebChat:
                     return self.respond(403, {"error": "Send messages from the Veyra page."})
                 if not self.authenticated():
                     return self.respond(401, {"error": "Sign in with username veyra and your Veyra network password."})
-                if self.path not in ("/api/messages", "/api/password", "/api/keys"):
+                if self.path not in ("/api/messages", "/api/password", "/api/keys", "/api/auto-approve"):
                     return self.respond(404, {"error": "Page not found."})
                 if self.path == "/api/keys" and not self.local_client():
                     return self.respond(403, {"error": "Open http://localhost:3000 on the computer running Veyra "
@@ -418,7 +447,7 @@ class WebChat:
                     payload = json.loads(self.rfile.read(length))
                 except (ValueError, UnicodeDecodeError):
                     return self.respond(400, {"error": "Invalid message."})
-                action = {"/api/password": chat.change_password, "/api/keys": chat.save_api_key,
+                action = {"/api/auto-approve": chat.set_auto_approve, "/api/password": chat.change_password, "/api/keys": chat.save_api_key,
                           "/api/messages": chat.submit}[self.path]
                 status, result = action(payload)
                 self.respond(status, result)
