@@ -1,10 +1,5 @@
 {
-  "summary": "Added a navigation regression test to keep agent pages from linking to the removed /recovery route. Main has no Dashboard or Versions pages; their navigation fix will be applied on local.",
-  "instructions": "Use Chat and Settings on port 3000. For process recovery, manually open http://127.0.0.1:3001 on the computer running Veyra, not on a remote device. Run the agent test suite to verify application navigation does not link to /recovery.",
-  "links": [
-    {
-      "label": "Chat and Settings",
-      "path": "/"
-    }
-  ]
+  "summary": "Simplified the README into a short guide to starting, connecting, using, and recovering Veyra.",
+  "instructions": "Read README.md for the quick start. Run ./supervisor/supervisor, open http://localhost:3000, and choose your service in Settings. Recovery remains at http://127.0.0.1:3001 on the Veyra computer.",
+  "links": []
 }
