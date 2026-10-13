@@ -170,22 +170,18 @@ for line in sys.stdin:
         self.assertEqual([e["text"] for e in events], ["hello", "Reply: hello"])
         self.assertEqual(events[0]["role"], "user")
 
-    def test_version_timeline_routes_and_shared_updates(self):
-        status, body = self.request("GET", "/versions")
-        self.assertEqual(status, 200)
-        self.assertIn(b"Version timeline", body)
-        self.assertIn(b"/app-updates.js", body)
-        self.assertIn(self.chat.ui_version.encode(), body)
-        for path in ("/versions.js", "/versions.css"):
-            self.assertEqual(self.request("GET", path)[0], 200)
-        for cursor in ("-1", "bad", "100001"):
-            self.assertEqual(self.request("GET", "/api/versions?offset=" + cursor)[0], 400)
-        self.assertEqual(self.request("GET", "/api/versions")[0], 503)
-        with patch.object(self.chat.timeline, "page", return_value={"versions": [], "next_offset": None}):
-            self.assertEqual(self.request("GET", "/api/versions")[0], 200)
+    def test_versions_removed_and_remaining_pages_keep_shared_updates(self):
+        for path in ("/versions", "/versions.js", "/versions.css", "/api/versions",
+                     "/api/versions?offset=0"):
+            self.assertEqual(self.request("GET", path)[0], 404)
         self.assertEqual(self.request("POST", "/api/versions", {})[0], 404)
-        self.assertIn(b'/versions', self.request("GET", "/")[1])
-        self.assertIn(b'/versions', self.request("GET", "/dashboard")[1])
+        self.assertFalse(hasattr(self.chat, "timeline"))
+        for path in ("/", "/dashboard"):
+            status, body = self.request("GET", path)
+            self.assertEqual(status, 200)
+            self.assertNotIn(b'/versions', body)
+            self.assertIn(b'/app-updates.js', body)
+            self.assertIn(self.chat.ui_version.encode(), body)
 
     def test_dashboard_is_read_only_and_excludes_private_configuration(self):
         self.chat.configuration.update(provider="chatgpt", model="test-model", connected=True,

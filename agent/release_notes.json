@@ -1,10 +1,14 @@
 {
-  "summary": "Removed the Tasks feature, including its page, navigation, API, and background progress tracking.",
-  "instructions": "Open Chat, Dashboard, or Versions: Tasks is no longer in navigation. Old Tasks bookmarks and API requests return not found. Chat messages, command approvals, auto-approval, and existing history still work. Open pages receive the new version through the shared update monitor after restart, without discarding unfinished drafts or private forms. Tested with 156 Python tests, the self-test, desktop/mobile chat runtime checks, four-width layout checks, and Markdown rendering tests.",
+  "summary": "Removed the Versions page, its navigation links, and its timeline API. Git history and recovery controls are unchanged.",
+  "instructions": "Open Chat or Dashboard: Versions no longer appears in navigation. Old /versions bookmarks and /api/versions requests return not found. Open pages update after restart through the existing shared monitor, without discarding unfinished drafts or private forms. Verified with all 153 Python tests, the self-test, desktop/mobile chat runtime checks, and four-width layout checks.",
   "links": [
     {
       "label": "Chat",
       "path": "/"
+    },
+    {
+      "label": "Dashboard",
+      "path": "/dashboard"
     }
   ]
 }

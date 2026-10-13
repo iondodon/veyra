@@ -22,7 +22,7 @@ class NoTasksTests(unittest.TestCase):
                         response.read()
                         self.assertEqual(response.status, 404)
                         conn.close()
-                for path in ['/', '/dashboard', '/versions']:
+                for path in ['/', '/dashboard']:
                     conn = http.client.HTTPConnection('127.0.0.1', port)
                     conn.request('GET', path)
                     response = conn.getresponse()

@@ -16,7 +16,6 @@ from urllib.parse import parse_qs, urlsplit
 
 from images import validate_images, MAX_REQUEST_BYTES
 from system_dashboard import SystemDashboard
-from version_timeline import VersionTimeline, HistoryUnavailable
 
 import sys
 from api_credentials import CredentialError, CredentialStore, KEY_NAMES
@@ -36,8 +35,7 @@ class WebChat:
         self.assets = {filename: (ASSETS / filename).read_bytes()
                        for filename in ("chat.html", "chat.js", "chat.css", "app_updates.js",
                                         "marked.js", "purify.js", "chat-markdown.js",
-                                        "dashboard.html", "dashboard.js", "dashboard.css",
-                                        "versions.html", "versions.js", "versions.css")}
+                                        "dashboard.html", "dashboard.js", "dashboard.css")}
         directory = Path(root) / "state/chat"
         directory.mkdir(parents=True, exist_ok=True)
         directory.chmod(0o700)
@@ -61,7 +59,6 @@ class WebChat:
         self.server = None
         self.begin_session()
         self.dashboard = SystemDashboard(root)
-        self.timeline = VersionTimeline(root)
 
     def begin_session(self):
         with closing(sqlite3.connect(self.database)) as connection:
@@ -364,14 +361,6 @@ class WebChat:
                     return self.respond(200, {"ready": chat.ready, "busy": chat.busy})
                 if parsed.path == "/api/app-version":
                     return self.respond(200, {"ready": chat.ready, "ui_version": chat.ui_version})
-                if parsed.path == "/api/versions":
-                    try:
-                        offset = int(parse_qs(parsed.query).get("offset", ["0"])[0])
-                        return self.respond(200, chat.timeline.page(offset))
-                    except ValueError:
-                        return self.respond(400, {"error": "Invalid timeline cursor."})
-                    except HistoryUnavailable as error:
-                        return self.respond(503, {"error": str(error)})
                 if parsed.path == "/api/dashboard":
                     return self.respond(200, chat.dashboard.snapshot(chat))
                 if parsed.path == "/api/events":
@@ -392,9 +381,6 @@ class WebChat:
                 assets = {
                     "/": ("chat.html", "text/html; charset=utf-8"),
                     "/chat.css": ("chat.css", "text/css; charset=utf-8"),
-                    "/versions": ("versions.html", "text/html; charset=utf-8"),
-                    "/versions.js": ("versions.js", "text/javascript; charset=utf-8"),
-                    "/versions.css": ("versions.css", "text/css; charset=utf-8"),
                     "/dashboard": ("dashboard.html", "text/html; charset=utf-8"),
                     "/dashboard.js": ("dashboard.js", "text/javascript; charset=utf-8"),
                     "/dashboard.css": ("dashboard.css", "text/css; charset=utf-8"),
