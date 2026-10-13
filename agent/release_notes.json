@@ -1,5 +1,14 @@
 {
-  "summary": "New chat requests automatically include a rolling window of the last 50 user and assistant chat messages from saved history.",
-  "instructions": "Continue chatting normally; no setup is needed. Each new model request includes up to 50 messages in chronological order, counting your current message, and including saved messages from before restarts or service changes. Older messages remain saved but are not sent in that request. This is direct message replay, not a summary. User image attachments within the window are replayed too. Tool output, command-approval prompts, setup notices, errors and release announcements are excluded; active command approvals retain the tool context needed to complete the current request. The chat composer now shows the 50-message context policy. Tests cover the exact limit and order, restart persistence, current-message inclusion, exclusions, credential redaction, image replay, provider translations and replacement of unbounded response chaining. Live model inference was not tested. Large messages or many images can still exceed your selected provider's limits; no service or billing mode is changed automatically.",
-  "links": [{"label": "Open chat", "path": "/"}]
+  "summary": "Added a live Tasks page showing request progress, command approvals, execution results and replies.",
+  "instructions": "Open Tasks in the navigation, or /tasks, then send a request in Chat. The page updates every second while visible. It shows Working, Awaiting approval, Finished or Interrupted alongside timestamped command/output/reply events. Follow Open chat to approve or deny commands; approvals still require your explicit action. Finished means the request ended, not that all commands or tests passed: inspect the output and final reply. The panel retains the last 10 requests and up to 100 events per request in the current runtime session; previews are limited to 8,000 characters per event and 1,000 for request text, with full messages in chat. It clears on restart and does not change saved chat history or the 50-message context window. All 148 automated tests, JavaScript syntax validation and startup self-test passed; no live model or visual browser test was performed.",
+  "links": [
+    {
+      "label": "Task progress",
+      "path": "/tasks"
+    },
+    {
+      "label": "Open chat",
+      "path": "/"
+    }
+  ]
 }

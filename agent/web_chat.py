@@ -14,6 +14,8 @@ import sqlite3
 import threading
 from urllib.parse import parse_qs, urlsplit
 
+from task_progress import TaskProgress
+
 from images import validate_images, MAX_REQUEST_BYTES
 from system_dashboard import SystemDashboard
 from version_timeline import VersionTimeline, HistoryUnavailable
@@ -36,7 +38,8 @@ class WebChat:
         self.assets = {filename: (ASSETS / filename).read_bytes()
                        for filename in ("chat.html", "chat.js", "chat.css", "app_updates.js",
                                         "dashboard.html", "dashboard.js", "dashboard.css",
-                                        "versions.html", "versions.js", "versions.css")}
+                                        "versions.html", "versions.js", "versions.css",
+                                        "tasks.html", "tasks.js", "tasks.css")}
         directory = Path(root) / "state/chat"
         directory.mkdir(parents=True, exist_ok=True)
         directory.chmod(0o700)
@@ -69,6 +72,7 @@ class WebChat:
         # Reload every open app page after any restart, regardless of which files changed.
         self.ui_version = self.session_id
         self.release_announced = False
+        self.progress = TaskProgress()
         self.configuration = {"provider": None, "model": None, "connected": False, "sign_in_url": None}
 
     def publish(self, text, *, role="system", kind="message", **fields):
@@ -166,6 +170,7 @@ class WebChat:
 
     def detach(self):
         with self.lock:
+            self.progress.interrupt()
             if self.approval_id:
                 self.publish("The pending command request was cancelled because Veyra restarted.")
             self.process = None
@@ -198,6 +203,10 @@ class WebChat:
                     self.detach()
 
     def agent_event(self, event):
+        clean_event = dict(event)
+        if "text" in clean_event:
+            clean_event["text"] = self.credentials.redact(str(clean_event["text"]))
+        self.progress.event(clean_event)
         kind = event["type"]
         if kind == "message":
             role = event.get("role", "assistant")
@@ -248,6 +257,7 @@ class WebChat:
             approval = text.lower().rstrip(".!").strip()
             if approval in ("/approve", "/deny", "approve", "deny", "approve these commands", "deny these commands") and (not self.approval_id or approval_id != self.approval_id):
                 return 409, {"error": "That command request is no longer active."}
+            self.progress.start(text, continuation=bool(self.approval_id))
             self.busy = True
             self.publish(text, role="user", images=images)
             message = {"text": text, "approval_id": approval_id, "images": images,
@@ -343,6 +353,11 @@ class WebChat:
                         return self.respond(400, {"error": "Invalid timeline cursor."})
                     except HistoryUnavailable as error:
                         return self.respond(503, {"error": str(error)})
+                if parsed.path == "/api/tasks":
+                    with chat.lock:
+                        data = {"tasks": chat.progress.snapshot(), "ready": chat.ready,
+                                "ui_version": chat.ui_version, "session_id": chat.session_id}
+                    return self.respond(200, data)
                 if parsed.path == "/api/dashboard":
                     return self.respond(200, chat.dashboard.snapshot(chat))
                 if parsed.path == "/api/events":
@@ -361,6 +376,9 @@ class WebChat:
                     except (CredentialError, OSError):
                         return self.respond(500, {"error": "Veyra couldn't read the saved API key settings."})
                 assets = {
+                    "/tasks": ("tasks.html", "text/html; charset=utf-8"),
+                    "/tasks.js": ("tasks.js", "text/javascript; charset=utf-8"),
+                    "/tasks.css": ("tasks.css", "text/css; charset=utf-8"),
                     "/": ("chat.html", "text/html; charset=utf-8"),
                     "/chat.css": ("chat.css", "text/css; charset=utf-8"),
                     "/versions": ("versions.html", "text/html; charset=utf-8"),
