@@ -12,7 +12,7 @@
 <body>
   <header>
     <a class="brand" href="/" aria-label="Veyra chat"><span class="mark">v</span>Veyra<span class="local">LOCAL</span></a>
-    <nav aria-label="Navigation"><a href="/">Chat</a><a href="/versions">Versions</a><a href="/recovery">Recovery</a><a href="/tasks">Tasks</a></nav>
+    <nav aria-label="Navigation"><a href="/">Chat</a><a href="/versions">Versions</a><a href="/tasks">Tasks</a></nav>
   </header>
   <main>
     <span class="eyebrow">YOUR LOCAL SYSTEM</span>
@@ -24,7 +24,7 @@
       <section class="card" aria-labelledby="host-title"><h2 id="host-title">Host &amp; CPU</h2><p id="os" class="metric">—</p><dl><dt>Host uptime</dt><dd id="host-uptime">—</dd><dt>Logical CPUs</dt><dd id="cpus">—</dd><dt>Load · 1 / 5 / 15 min</dt><dd id="load">—</dd></dl><p class="note">Load counts runnable or waiting tasks, not CPU utilization. Host metrics may reflect the container or OS environment.</p></section>
       <section class="card" aria-labelledby="memory-title"><h2 id="memory-title">Memory</h2><p id="memory" class="metric">—</p><progress id="memory-bar" max="100" value="0" aria-label="Memory used" hidden></progress><p id="memory-detail" class="note">—</p><p class="note">Used memory is total minus available memory.</p></section>
       <section class="card" aria-labelledby="disk-title"><h2 id="disk-title">Storage</h2><p id="disk" class="metric">—</p><progress id="disk-bar" max="100" value="0" aria-label="Storage used" hidden></progress><p id="disk-detail" class="note">—</p><p class="note">Filesystem containing Veyra’s project.</p></section>
-      <section class="card version" aria-labelledby="version-title"><h2 id="version-title">Current version</h2><dl><dt>Branch</dt><dd id="branch">—</dd><dt>Commit</dt><dd id="commit">—</dd><dt>Working tree</dt><dd id="changes">—</dd></dl><p class="note">For startup problems or restoring a working version, use <a href="/recovery">Recovery</a>. Credentials and persistent state remain outside version restoration.</p></section>
+      <section class="card version" aria-labelledby="version-title"><h2 id="version-title">Current version</h2><dl><dt>Branch</dt><dd id="branch">—</dd><dt>Commit</dt><dd id="commit">—</dd><dt>Working tree</dt><dd id="changes">—</dd></dl><p class="note">For startup problems or restoring a working version, open <code>http://127.0.0.1:3001</code> on the computer running Veyra. Recovery is host-local, not available from this app or a remote device. Credentials and persistent state remain outside version restoration.</p></section>
     </div>
     <p class="note">Updates every five seconds while this page is visible. Unsupported metrics show “Unavailable”. No credentials, logs, or conversation content are displayed.</p>
   </main>

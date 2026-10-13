@@ -1,14 +1,14 @@
 {
-  "summary": "Added a session-only Auto-approve commands toggle in Chat Settings, with confirmation and a visible Turn off control.",
-  "instructions": "Open Chat \u2192 Settings \u2192 Auto-approve commands: Off after connecting a service. Confirm the warning to allow all new shell command requests to run without individual approval. This can delete files or change this computer; enable only when you trust the task. Resolve existing pending approvals manually before enabling. Send a harmless request such as \u201cRun printf hello\u201d and check the command, automatic approval notice and output in Chat and Tasks. Use Turn off in the visible warning or the Settings toggle to restore manual approval. Turning it off does not stop commands already approved or running. Auto-approve resets to Off on agent restart, service disconnect or service change; it is not stored in browser storage or persisted across sessions. The normal approval path, authenticated same-origin controls and supervisor recovery boundary are preserved. All 151 automated tests, JavaScript syntax validation and startup self-test passed. No live model or visual browser test was performed.",
+  "summary": "Removed broken recovery links from Dashboard and Versions. Recovery directions now specify the host-local address. Local features are rebased onto the updated main, with published history preserved.",
+  "instructions": "Open Dashboard and Versions from Chat and verify navigation no longer offers the removed /recovery route. Both pages explain that process recovery is at http://127.0.0.1:3001, opened manually on the computer running Veyra, not on a remote device. The agent app remains on port 3000; automatic updates and draft protection are unchanged. The full agent test suite and changed JavaScript syntax checks passed.",
   "links": [
     {
-      "label": "Chat and Settings",
-      "path": "/"
+      "label": "Dashboard",
+      "path": "/dashboard"
     },
     {
-      "label": "Task progress",
-      "path": "/tasks"
+      "label": "Versions",
+      "path": "/versions"
     }
   ]
 }

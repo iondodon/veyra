@@ -33,7 +33,7 @@ async function refresh() {
   refreshButton.disabled = true;
   try {
     const response = await fetch("/api/dashboard", {cache: "no-store", signal: AbortSignal.timeout(10000)});
-    if (response.status === 503) throw new Error("Veyra is unavailable. Open Recovery to check startup.");
+    if (response.status === 503) throw new Error("Veyra is unavailable. For recovery, open http://127.0.0.1:3001 on the computer running Veyra.");
     if (!response.ok) throw new Error("Cannot load system status. Check your connection or sign-in.");
     const data = await response.json();
     const agent = data.agent;

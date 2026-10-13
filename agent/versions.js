@@ -48,7 +48,7 @@ async function load() {
   statusLine.classList.remove("error");
   try {
     const response = await fetch(`/api/versions?offset=${offset}`, {cache: "no-store", signal: AbortSignal.timeout(30000)});
-    if (!response.ok) throw new Error(response.status === 503 ? "Version history is unavailable. Try again or open Recovery." : "Cannot load history. Check your connection or sign-in.");
+    if (!response.ok) throw new Error(response.status === 503 ? "Version history is unavailable. Try again. For recovery, open http://127.0.0.1:3001 on the computer running Veyra." : "Cannot load history. Check your connection or sign-in.");
     const data = await response.json();
     const cards = data.versions.map(versionCard);
     list.append(...cards);
