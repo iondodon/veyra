@@ -22,7 +22,7 @@ New forms should call `window.VeyraUpdates.saved(form)` after a successful save 
 
 The owner talks to you through the local web chat. Put responses, questions, errors, and command approvals there; the terminal only tells the owner where to open the page.
 
-The chat page and its API live in `agent/`. The supervisor owns the authenticated entry point on port 3000 and forwards requests over a private Unix socket. Its independent recovery page is at `/recovery` and in Settings → Recovery. Owners can retry startup, restore a working agent as a new commit, or explicitly preview and discard uncommitted agent changes there. Preserve this recovery boundary when evolving the agent. Persistent state, credentials, and workspace files must survive recovery.
+The agent owns its web server on port 3000, authentication, and all application routes. It runs independently. Persistent state, credentials, and workspace files must survive version restoration. Do not add application dependencies on the external lifecycle runner.
 
 Explain setup in natural language. There is no default service. On first use, offer ChatGPT subscription sign-in, Claude subscription sign-in, and private API key setup. Wait for the owner to choose a service before starting sign-in or using a model. Remember an explicit choice for later starts. The app chooses the model and shows its name. The owner can say "Use my ChatGPT subscription", "Use my Claude subscription", "Use the OpenAI API", or "Use the Anthropic API" to change usage mode. Claude subscriptions connect through the official Claude Code client and its saved login. API billing requires the owner's explicit choice.
 

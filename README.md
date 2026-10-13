@@ -22,12 +22,12 @@ From the repository root:
 The terminal prints one line:
 
 ```text
-Open Veyra at http://localhost:3000
+Open local recovery at http://127.0.0.1:3001
 ```
 
-Open that page on the same computer. Setup, provider selection, responses,
+Open the app at http://localhost:3000. Setup, provider selection, responses,
 errors, command output, and approvals appear in the chat. Port 3000 must be
-free. `./agent/START` launches the same interface. Stop the foreground
+free; recovery also requires loopback port 3001. `./agent/START` runs the app independently, without recovery. Stop the foreground
 supervisor with Ctrl+C.
 
 ### Open from another device
@@ -54,8 +54,8 @@ sign-in links remain limited to localhost. Arbitrary domain names are rejected.
 The listener uses HTTP, which does not encrypt the login or conversation; use an
 encrypted tunnel for access across an untrusted network.
 
-The address remains available while the agent starts or changes commits. A
-small recovery page appears if the agent is unavailable. Each
+Port 3000 belongs to the agent and may be briefly unavailable during restarts.
+Local recovery remains independently available on port 3001. Each
 agent start opens a clean visible conversation with a plain-language setup
 message. Reloading the page keeps the current conversation. Earlier sessions
 remain saved under `state/chat/`; routine startup diagnostics are hidden from
@@ -222,10 +222,9 @@ veyra/
 │   ├── chat.html
 │   ├── chat.css
 │   └── chat.js
-├── supervisor/     # lifecycle, authenticated gateway, and recovery
+├── supervisor/     # black-box process lifecycle and local recovery
 │   ├── supervisor
-│   ├── web_gateway.py
-│   ├── api_credentials.py
+│   ├── recovery_server.py
 │   ├── recovery.py
 │   ├── recovery.html
 │   ├── recovery.css
@@ -234,23 +233,28 @@ veyra/
 └── workspace/      # local development area, ignored by Git
 ```
 
-Only one supervisor may run per repository. It owns the network listener on
-port 3000 and holds an exclusive lock under `state/`. It reads `HEAD`, requires a clean,
-Git-tracked `agent/`, runs `agent/START --self-test`, and starts that agent.
-Startup checks and child diagnostics are saved locally and available under
-**Recovery → View error details**. Routine output stays out of the terminal.
+Only one supervisor may run per repository. It holds an exclusive lock under
+`state/`, watches `HEAD`, requires a clean Git-tracked `agent/`, and launches
+`agent/START` with no arguments. This executable is a black box: the supervisor
+never imports agent code, calls agent HTTP endpoints, reads credentials, or
+interprets application state. It uses process groups, signals, exit status, and
+captured stdout/stderr. The executable owns all runtime setup and application
+behavior. There is no mandatory self-test interface; test successors before committing.
 
-The agent owns the chat page, chat API, conversation storage, provider setup,
-and approvals. Its web server listens on a private Unix socket under
-`state/run/`, with owner-only permissions and a per-start authentication token.
-The supervisor checks network authentication, host, and request origin before
-forwarding requests. It supplies the actual client's local/network status;
-network clients cannot use forwarding headers to bypass private API key entry.
-Only the supervisor listens on a network port.
+The agent owns port 3000, network authentication, host and origin checks, private
+forms, all pages and APIs, and automatic page updates. It runs identically when
+started manually. There is no gateway, private socket, injected client context,
+or agent link to recovery. API credential code belongs to `agent/`.
 
-The supervisor watches `HEAD`. After a successor commit passes its self-test,
-it restarts the agent while keeping the address available and opening a fresh
-conversation for the new agent session.
+The supervisor serves recovery only on `127.0.0.1:3001`, without login. Host and
+same-origin checks protect local controls from browser cross-origin requests.
+It does not expose recovery to the network. Its process status is not proof
+of application readiness. A version is recorded as last working only after its
+process survives ten seconds; a live but malfunctioning app cannot be detected
+by this black-box runner.
+
+On a committed change the supervisor restarts the agent. A failed process is
+restarted; recovery remains available even when port 3000 is unavailable.
 Open app pages automatically reload after every agent restart, so content,
 layout, styling, controls, behavior, and other assets load from the current
 version without a manual refresh. HTML responses include the shared update
@@ -266,28 +270,25 @@ a model. Notes belong to the committed version, survive reboots, and use paths
 relative to the address used to open Veyra. Failed startup candidates do not
 announce their changes as available.
 
-If a candidate fails, the current process keeps running and the recovery page
-reports the problem. Chat interface changes belong to the next agent version;
+If a process fails, local recovery reports the problem. Chat interface changes belong to the next agent version;
 supervisor and recovery interface changes require a supervisor restart.
 
 ### Recovery
 
-Open **Settings → Recovery**, or visit `http://COMPUTER_IP:3000/recovery`.
-The same password protects the chat and recovery page. When the agent cannot
-start, opening the main address displays recovery automatically. This page
-works without the agent or a model connection and offers:
+On the computer running Veyra, open **http://127.0.0.1:3001** directly.
+No login is required. The agent does not link to or depend on this page.
+For remote administration use an explicit SSH tunnel; do not expose port 3001.
+Recovery works without the agent or a model connection and offers:
 
-- **Retry startup:** stop the current agent, rerun its startup check, and start it.
+- **Retry startup:** stop the current process and launch the committed executable again.
 - **Use last working version:** preview and confirm restoring the last agent
-  that successfully served the chat. Recovery creates a new commit on your
-  current branch containing that agent code; existing history and changes
-  outside `agent/` are preserved. Commit or discard dirty agent files first.
-- **Discard uncommitted changes:** preview modified, staged, deleted, and new
-  agent files, acknowledge permanent loss, then discard those changes and
-  retry startup. Only previewed, non-ignored agent files are eligible for
-  deletion. Changes outside `agent/`, ignored files, chats, credentials,
-  saved service selection, and workspace files are preserved.
-- **View error details** and **Open chat** when the agent is ready.
+  whose process survived the probation window. Recovery creates a new commit
+  on the current branch; history and changes outside `agent/` are preserved.
+- **Discard uncommitted changes:** preview and explicitly confirm resetting
+  agent code. Only previewed non-ignored files can be deleted. Persistent state,
+  credentials, workspace, ignored files, and changes outside `agent/` are preserved.
+- **View error details:** inspect captured process output. The supervisor does
+  not read credentials to redact logs; applications must not print secrets.
 
 Destructive confirmations expire after two minutes, cannot be reused, and are
 rejected if the agent files, commit, or branch changed after the preview.

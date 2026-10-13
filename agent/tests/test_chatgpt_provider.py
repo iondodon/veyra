@@ -224,7 +224,7 @@ class WebChatGPTTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(bootstrap, "STATE", Path(directory) / "state"), \
                 patch.object(bootstrap, "PROVIDER_FILE", Path(directory) / "state/memory/provider.json"), \
-                patch.dict(bootstrap.os.environ, {"VEYRA_WEB_TRANSPORT": "1"}, clear=True), \
+                patch.dict(bootstrap.os.environ, {}, clear=True), \
                 patch.object(bootstrap.sys, "argv", ["bootstrap.py"]), \
                 patch.object(bootstrap.sys, "stdin", incoming()), \
                 patch.object(bootstrap, "load_selected_provider", return_value=None), \
@@ -232,7 +232,7 @@ class WebChatGPTTests(unittest.TestCase):
                 patch.object(bootstrap, "provider_available", return_value=False), \
                 patch.object(bootstrap, "emit", side_effect=lambda event_type, **fields: events.append({"type": event_type, **fields})), \
                 patch.object(bootstrap, "run_local", side_effect=execute):
-            self.assertEqual(bootstrap.main(), 0)
+            self.assertEqual(bootstrap.run_conversation(incoming()), 0)
         return [e["text"] for e in events if "text" in e], executed
 
     def test_commands_wait_for_owner_approval_and_results_resume_same_provider(self):

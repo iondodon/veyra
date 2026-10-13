@@ -78,16 +78,6 @@ class GitAgentTests(unittest.TestCase):
         supervisor.require_committed_agent(root)
         self.assertEqual(supervisor.validate_agent(root), root / "agent")
 
-    def test_commit_changed_during_self_test_is_not_activated(self):
-        root = self.make_repository()
-        revision = supervisor.current_revision(root)
-        def check(_agent, _revision):
-            subprocess.run(["git", "-C", str(root), "commit", "--allow-empty", "-qm", "new revision"], check=True)
-            return True
-        with patch.object(supervisor, "run_self_test", side_effect=check):
-            with self.assertRaisesRegex(supervisor.SupervisorError, "changed during"):
-                supervisor.prepare_checked_out_agent(root, revision)
-
     def test_dirty_agent_is_rejected(self):
         root = self.make_repository()
         (root / "agent" / "bootstrap.py").write_text("print('draft')\n")
@@ -105,20 +95,13 @@ class GitAgentTests(unittest.TestCase):
         with self.assertRaisesRegex(supervisor.SupervisorError, "not tracked"):
             supervisor.require_committed_agent(root)
 
-    def test_self_test_controls_activation(self):
-        healthy = self.make_repository()
-        broken = self.make_repository(self_test_exit_code=7)
-
-        self.assertTrue(
-            supervisor.run_self_test(
-                healthy / "agent", supervisor.current_revision(healthy)
-            )
-        )
-        self.assertFalse(
-            supervisor.run_self_test(
-                broken / "agent", supervisor.current_revision(broken)
-            )
-        )
+    def test_agent_is_black_box_no_self_test_invocation(self):
+        root = self.make_repository(self_test_exit_code=7)
+        revision = supervisor.current_revision(root)
+        self.assertEqual(supervisor.prepare_checked_out_agent(root, revision), root / "agent")
+        process = supervisor.start_agent(root / "agent", revision)
+        self.assertEqual(process.wait(timeout=3), 0)
+        process.stdout.close()
 
     def test_agent_directory_cannot_be_a_symlink(self):
         directory = tempfile.TemporaryDirectory()

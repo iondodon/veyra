@@ -340,3 +340,28 @@ for line in sys.stdin:
 
 if __name__ == "__main__":
     unittest.main()
+
+class DirectNetworkBoundaryTests(unittest.TestCase):
+    def test_numeric_public_host_requires_auth_and_cannot_spoof_local(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            chat = WebChat(Path(tmp))
+            port = chat.start(0)
+            try:
+                def request(method, path, authenticated=False):
+                    c = http.client.HTTPConnection('127.0.0.1', port, timeout=3)
+                    host = '8.8.8.8:8080'
+                    headers = {'Host': host, 'Origin': 'http://' + host, 'Content-Type': 'application/json',
+                               'X-Veyra-Local': '1', 'X-Veyra-Token': 'anything'}
+                    if authenticated:
+                        headers['Authorization'] = 'Basic ' + base64.b64encode(b'veyra:veyra').decode()
+                    c.request(method, path, body='{}' if method == 'POST' else None, headers=headers)
+                    res = c.getresponse(); body = json.loads(res.read()); c.close()
+                    return res.status, body
+                self.assertEqual(request('GET', '/api/events')[0], 401)
+                status, data = request('GET', '/api/events', True)
+                self.assertEqual(status, 200)
+                self.assertFalse(data['status']['local_client'])
+                self.assertEqual(request('POST', '/api/keys', True)[0], 403)
+                self.assertEqual(request('GET', '/recovery', True)[0], 404)
+            finally:
+                chat.close()

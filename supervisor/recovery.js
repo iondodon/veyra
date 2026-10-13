@@ -3,7 +3,7 @@ const q = selector => document.querySelector(selector);
 const dialog = q("#confirmation");
 let preview = null;
 let submitting = false;
-let automatic = location.pathname === "/";
+
 
 async function request(path, payload) {
   const response = await fetch(path, {cache: "no-store", ...(payload ? {
@@ -17,19 +17,18 @@ async function request(path, payload) {
 async function poll() {
   try {
     const state = await request("/api/recovery");
-    q("#agent-status").textContent = state.busy ? "Recovery in progress" : state.ready ? "Agent online" : "Agent offline";
+    q("#agent-status").textContent = state.busy ? "Recovery in progress" : state.ready ? "Agent process running" : "Agent offline";
     q("#agent-status").classList.toggle("online", state.ready);
     q("#title").textContent = state.busy ? "Veyra is restarting" : state.ready ?
       (state.error ? "Veyra is using a working version" : "Veyra is running") :
       state.error || state.changes.length ? "Veyra couldn’t start" : "Veyra is starting";
     q("#description").textContent = state.changes.length ? "Uncommitted agent code must be committed or discarded before startup." :
-      state.ready ? "Your chat is available. Recovery controls remain here if you need them." :
+      state.ready ? "The process is running. This does not verify application readiness." :
       "This page stays available while the agent starts or restarts.";
     q("#error").hidden = !state.error;
     q("#error").textContent = state.error || "";
     q("#revision").textContent = state.revision ? state.revision.slice(0, 12) : "Unavailable";
     q("#last-working").textContent = state.last_working ? state.last_working.slice(0, 12) : "Not recorded yet";
-    q("#open-chat").hidden = !state.ready;
     q("#retry").disabled = state.busy || submitting;
     q("#discard").disabled = state.busy || submitting || !state.changes.length;
     q("#restore").disabled = state.busy || submitting || state.changes.length > 0 ||
@@ -37,14 +36,12 @@ async function poll() {
     q("#change-summary").textContent = state.changes.length ?
       state.changes.length + " uncommitted agent file(s). Discarding resets only agent code." : "";
     q("#diagnostics").textContent = state.diagnostics.join("\n") || "No diagnostics yet.";
-    if (automatic && state.ready && !state.error && !dialog.open) location.replace("/");
   } catch (error) {
     q("#feedback").textContent = error.message;
   } finally { window.setTimeout(poll, 1000); }
 }
 
 async function openPreview(action) {
-  automatic = false;
   q("#feedback").textContent = "";
   try {
     preview = await request("/api/recovery/preview", {action});
@@ -52,7 +49,7 @@ async function openPreview(action) {
     q("#confirmation-title").textContent = discard ? "Discard code changes?" : "Return to a working version?";
     q("#confirmation-description").textContent = discard ?
       "Reset agent code to the current commit, then retry startup? The active agent will be restarted." :
-      "Restore the last working agent code in a new commit, then run its startup check?";
+      "Restore the last working agent code in a new commit, then launch its executable?";
     q("#confirmation-revision").textContent = (discard ? preview.revision : preview.target).slice(0, 12);
     q("#changes").replaceChildren();
     for (const change of preview.changes) {
@@ -91,18 +88,17 @@ q("#confirmation-form").addEventListener("submit", async event => {
   try {
     await request("/api/recovery/action", {action: preview.action, token: preview.token, confirmed: true});
     dialog.close();
-    q("#feedback").textContent = "Recovery requested. Waiting for the startup check…";
+    q("#feedback").textContent = "Recovery requested. Waiting for the process…";
   } catch (error) {
     q("#confirmation-error").textContent = error.message + " Close this dialog and open a fresh preview.";
     preview = null;
   } finally { submitting = false; q("#cancel").disabled = false; }
 });
 q("#retry").addEventListener("click", async () => {
-  automatic = false;
   q("#retry").disabled = true;
   try {
     await request("/api/recovery/action", {action: "retry"});
-    q("#feedback").textContent = "Retry requested. Waiting for the startup check…";
+    q("#feedback").textContent = "Retry requested. Waiting for the process…";
   } catch (error) { q("#feedback").textContent = error.message; }
 });
 poll();

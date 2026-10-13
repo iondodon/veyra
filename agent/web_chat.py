@@ -10,13 +10,11 @@ from pathlib import Path
 import queue
 import re
 import secrets
-import socketserver
 import sqlite3
 import threading
 from urllib.parse import parse_qs, urlsplit
 
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "supervisor"))
 from api_credentials import CredentialError, CredentialStore, KEY_NAMES
 from release_notes import load_notes
 
@@ -230,7 +228,7 @@ class WebChat:
                 return 503, {"error": "Veyra is restarting."}
             return 202, {"ok": True}
 
-    def start(self, port=WEB_PORT, *, socket_path=None, token=None):
+    def start(self, port=WEB_PORT):
         chat = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -242,22 +240,28 @@ class WebChat:
                 self.connection.settimeout(10)
 
             def allowed_host(self):
-                if socket_path:
-                    return bool(token) and secrets.compare_digest(self.headers.get("X-Veyra-Token", ""), token)
+                hosts = self.headers.get_all("Host", [])
+                if len(hosts) != 1:
+                    return False
+                host = hosts[0]
                 port = self.server.server_port
                 address = self.connection.getsockname()[0]
-                return self.headers.get("Host") in (
-                    f"localhost:{port}", f"127.0.0.1:{port}", f"{address}:{port}",
-                )
+                if host in (f"localhost:{port}", f"127.0.0.1:{port}", f"{address}:{port}"):
+                    return True
+                ip, separator, public_port = host.partition(":")
+                if separator and (not public_port.isascii() or not public_port.isdigit() or len(public_port) > 5 or not 0 < int(public_port) <= 65535):
+                    return False
+                try:
+                    address = ipaddress.IPv4Address(ip)
+                    return address.is_global and not address.is_multicast
+                except ValueError:
+                    return False
 
             def local_client(self):
-                if socket_path:
-                    return self.headers.get("X-Veyra-Local") == "1"
-                return ipaddress.ip_address(self.client_address[0]).is_loopback
+                return (ipaddress.ip_address(self.client_address[0]).is_loopback and self.headers.get("Host") in
+                        (f"localhost:{self.server.server_port}", f"127.0.0.1:{self.server.server_port}"))
 
             def authenticated(self):
-                if socket_path:
-                    return True  # The authenticated supervisor supplies the client context.
                 if self.local_client():
                     return True
                 scheme, _, credentials = self.headers.get("Authorization", "").partition(" ")
@@ -335,6 +339,8 @@ class WebChat:
                                                        "to save API keys securely."})
                 if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
                     return self.respond(415, {"error": "Send JSON."})
+                if self.headers.get("Transfer-Encoding"):
+                    return self.respond(400, {"error": "Use Content-Length."})
                 try:
                     length = int(self.headers.get("Content-Length", "0"))
                     if not 0 < length <= 100000:
@@ -352,16 +358,9 @@ class WebChat:
                 # Reloads may close sockets mid-response. Never write to the terminal.
                 pass
 
-        if socket_path:
-            class UnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
-                daemon_threads = True
-                handle_error = Server.handle_error
-            self.server = UnixServer(str(socket_path), Handler)
-            os.chmod(socket_path, 0o600)
-        else:
-            self.server = Server(("127.0.0.1", port), Handler)
+        self.server = Server(("0.0.0.0", port), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
-        return self.server.server_address if socket_path else self.server.server_port
+        return self.server.server_port
 
     def close(self):
         if self.server:

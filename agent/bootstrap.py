@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Veyra's agent and private web chat, reached through the supervisor."""
+"""Veyra's agent and standalone web application."""
 
 import json
 import os
@@ -11,7 +11,6 @@ import threading
 import uuid
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "supervisor"))
 from api_credentials import CredentialError, CredentialStore, KEY_NAMES
 from providers import (
     PROVIDER_NAMES, ProviderConfigError, api_key_env_var, create_provider, provider_available,
@@ -566,14 +565,14 @@ class Conversation:
 
 def self_test() -> int:
     required = [
-        ROOT / "supervisor", ROOT / ".git", AGENT_DIR, STATE, WORKSPACE, PROMPT,
+        ROOT / ".git", AGENT_DIR, STATE, WORKSPACE, PROMPT,
         AGENT_DIR / "providers.py", AGENT_DIR / "chatgpt_auth.py", AGENT_DIR / "chatgpt_provider.py",
         AGENT_DIR / "claude_subscription.py",
         AGENT_DIR / "web_chat.py", AGENT_DIR / "chat.html", AGENT_DIR / "chat.css", AGENT_DIR / "chat.js",
         AGENT_DIR / "host_browser.py",
         AGENT_DIR / "release_notes.py", AGENT_DIR / "release_notes.json",
         AGENT_DIR / "app_updates.js",
-        ROOT / "supervisor/api_credentials.py",
+        AGENT_DIR / "api_credentials.py",
     ]
     missing = [str(p) for p in required if not p.exists()]
     if missing:
@@ -609,19 +608,18 @@ def main() -> int:
         return auth_main(sys.argv[1:])
     if "--self-test" in sys.argv:
         return self_test()
-    if os.environ.get("VEYRA_WEB_TRANSPORT") != "1":
-        # Direct START also uses the same quiet web startup.
-        os.execv(sys.executable, [sys.executable, str(ROOT / "supervisor/supervisor")])
-    if os.environ.get("VEYRA_AGENT_SOCKET"):
-        from web_chat import WebChat
-        WEB_CHAT = WebChat(ROOT)
-        WEB_CHAT.start(socket_path=os.environ["VEYRA_AGENT_SOCKET"], token=os.environ["VEYRA_AGENT_TOKEN"])
-        def incoming():
-            while True:
-                yield json.dumps(WEB_CHAT.inbox.get())
-        lines = incoming()
-    else:
-        lines = sys.stdin
+    from web_chat import WebChat
+    WEB_CHAT = WebChat(ROOT)
+    WEB_CHAT.start(port=int(os.environ.get("VEYRA_WEB_PORT", "3000")))
+    print("Open Veyra at http://localhost:" + str(WEB_CHAT.server.server_port), flush=True)
+    def incoming():
+        while True:
+            yield json.dumps(WEB_CHAT.inbox.get())
+    lines = incoming()
+    return run_conversation(lines)
+
+
+def run_conversation(lines) -> int:
     conversation = Conversation()
     conversation.start()
     for line in lines:

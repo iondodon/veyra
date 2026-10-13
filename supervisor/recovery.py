@@ -10,7 +10,6 @@ import tempfile
 import threading
 import time
 
-from api_credentials import CredentialStore
 
 
 class RecoveryError(RuntimeError):
@@ -23,7 +22,6 @@ class Recovery:
         self.directory = self.root / "state/evolution"
         self.directory.mkdir(parents=True, exist_ok=True)
         self.record = self.directory / "last_working.json"
-        self.credentials = CredentialStore(self.root / "state")
         self.lock = threading.RLock()
         self.pending = None
         self.busy = False
@@ -39,7 +37,7 @@ class Recovery:
         result = subprocess.run(["git", "-C", str(self.root), *args], capture_output=True,
                                 env=env, timeout=20)
         if result.returncode:
-            raise RecoveryError(self.credentials.redact(result.stderr.decode("utf-8", "replace").strip())
+            raise RecoveryError("Git operation failed (exit " + str(result.returncode) + ")."
                                 or "Git could not complete recovery.")
         return result.stdout
 
@@ -84,7 +82,7 @@ class Recovery:
 
     def publish(self, text, *, kind="status"):
         with self.lock:
-            text = self.credentials.redact(str(text))
+            text = str(text)
             self.diagnostics.append(text)
             self.diagnostics = self.diagnostics[-120:]
             if kind == "error":

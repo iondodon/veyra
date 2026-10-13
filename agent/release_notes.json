@@ -1,14 +1,10 @@
 {
-  "summary": "Decoupled the authenticated web gateway from agent application routes. New application endpoints no longer require supervisor changes.",
-  "instructions": "Use Chat and Settings as usual. Authenticated application requests are forwarded to the agent, which validates its own routes and content. Recovery remains independently available at /recovery. Gateway regression tests cover new routes, HTTP methods, origin protection, request-size limits, and reserved recovery routes.",
+  "summary": "The agent now serves port 3000 directly, independently of any lifecycle runner. Application requests no longer pass through a gateway.",
+  "instructions": "Open the app on port 3000 and test Chat and Settings. Remote access still requires your network password; private API key forms remain localhost-only. Pages retain automatic updates and draft protection. Local process recovery is separate at http://127.0.0.1:3001 on the host computer, with no login or application links.",
   "links": [
     {
       "label": "Chat and Settings",
       "path": "/"
-    },
-    {
-      "label": "Recovery",
-      "path": "/recovery"
     }
   ]
 }
