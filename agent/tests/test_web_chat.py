@@ -183,6 +183,16 @@ for line in sys.stdin:
             self.assertIn(b'/app-updates.js', body)
             self.assertIn(self.chat.ui_version.encode(), body)
 
+    def test_mobile_app_removed_from_routes_and_navigation(self):
+        for path in ("/mobile", "/mobile.html"):
+            self.assertEqual(self.request("GET", path)[0], 404)
+        for path in ("/", "/dashboard"):
+            status, body = self.request("GET", path)
+            self.assertEqual(status, 200)
+            self.assertNotIn(b'href="/mobile"', body)
+            self.assertNotIn(b'iPhone app', body)
+            self.assertIn(b'/app-updates.js', body)
+
     def test_dashboard_is_read_only_and_excludes_private_configuration(self):
         self.chat.configuration.update(provider="chatgpt", model="test-model", connected=True,
                                        sign_in_url="https://private-signin.example/secret")

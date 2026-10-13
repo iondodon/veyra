@@ -1,5 +1,5 @@
 {
-  "summary": "Removed the Expo Go client and iPhone setup page, restoring the web app to its previous version.",
-  "instructions": "Continue using the existing web chat. The iPhone app navigation and /mobile setup page have been removed. Saved conversations, settings, and service credentials are unchanged.",
+  "summary": "Completed the Expo rollback cleanup so the reverted web interface can activate without the iPhone app menu.",
+  "instructions": "The chat and Dashboard no longer include the iPhone app link. Open pages update automatically once pending edits are finished and Settings is closed. Saved conversations, settings, and service login are unchanged.",
   "links": []
 }
