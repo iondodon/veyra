@@ -25,27 +25,6 @@ class WebChatTests(unittest.TestCase):
         self.processes = []
         self.addCleanup(self.stop_agents)
 
-    def test_screen_page_and_capture(self):
-        status, page = self.request("GET", "/screen")
-        self.assertEqual(status, 200)
-        self.assertIn(b'/app-updates.js', page)
-        self.assertIn(b'Start viewing', page)
-        for asset in ('screen.js', 'screen.css'):
-            self.assertEqual(self.request('GET', '/' + asset)[0], 200)
-        self.assertIn(b'/screen', self.request('GET', '/')[1])
-        self.assertIn(b'/screen', self.request('GET', '/dashboard')[1])
-        with patch.object(self.chat.host_screen, 'capture', return_value=b'fake PNG') as capture:
-            self.assertEqual(self.request('GET', '/api/screen')[0], 404)
-            self.assertEqual(self.request('POST', '/api/screen', {}, {'Origin': 'http://evil.test'})[0], 403)
-            self.assertEqual(self.request('POST', '/api/screen', {}, {'Host': f'8.8.8.8:{self.port}', 'Origin': f'http://8.8.8.8:{self.port}'})[0], 401)
-            capture.assert_not_called()
-            self.assertEqual(self.request('POST', '/api/screen', {}), (200, b'fake PNG'))
-        from host_screen import ScreenUnavailable
-        with patch.object(self.chat.host_screen, 'capture', side_effect=ScreenUnavailable('Desktop unavailable')):
-            status, body = self.request('POST', '/api/screen', {})
-            self.assertEqual(status, 503)
-            self.assertIn(b'Desktop unavailable', body)
-
     def test_markdown_assets_are_served_and_versioned(self):
         status, page = self.request("GET", "/")
         self.assertEqual(status, 200)

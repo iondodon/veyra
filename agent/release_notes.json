@@ -1,5 +1,14 @@
 {
-  "summary": "Added a View host screen button showing the desktop of the computer running Veyra, without remote control.",
-  "instructions": "Click View host screen next to Dashboard, then Start viewing. The desktop refreshes about every two seconds while the page is visible. Stop viewing clears the image; hiding the tab pauses capture. Desktop screenshots stay in memory, are not saved, and are not sent to the model. Private information on the desktop may be visible to anyone with access to your Veyra app, so use a trusted network and a strong network password. Capture was tested on this host; backend, route protection, and viewer lifecycle tests passed. Wayland requires grim and X11 requires ImageMagick import; unavailable or locked desktop sessions may show an error.",
-  "links": [{"label": "View host screen", "path": "/screen"}]
+  "summary": "Rolled back the host-screen viewer and restored the previous web interface.",
+  "instructions": "The View host screen button and desktop capture endpoints have been removed. After the app restarts, the menu updates automatically when no edits are pending. Your conversations, settings, and service login are unchanged.",
+  "links": [
+    {
+      "label": "Chat",
+      "path": "/"
+    },
+    {
+      "label": "Dashboard",
+      "path": "/dashboard"
+    }
+  ]
 }

@@ -16,7 +16,6 @@ from urllib.parse import parse_qs, urlsplit
 
 from images import validate_images, MAX_REQUEST_BYTES
 from system_dashboard import SystemDashboard
-from host_screen import HostScreen, ScreenUnavailable
 
 import sys
 from api_credentials import CredentialError, CredentialStore, KEY_NAMES
@@ -36,8 +35,7 @@ class WebChat:
         self.assets = {filename: (ASSETS / filename).read_bytes()
                        for filename in ("chat.html", "chat.js", "chat.css", "app_updates.js",
                                         "marked.js", "purify.js", "chat-markdown.js",
-                                        "dashboard.html", "dashboard.js", "dashboard.css",
-                                        "screen.html", "screen.js", "screen.css")}
+                                        "dashboard.html", "dashboard.js", "dashboard.css")}
         directory = Path(root) / "state/chat"
         directory.mkdir(parents=True, exist_ok=True)
         directory.chmod(0o700)
@@ -61,7 +59,6 @@ class WebChat:
         self.server = None
         self.begin_session()
         self.dashboard = SystemDashboard(root)
-        self.host_screen = HostScreen()
 
     def begin_session(self):
         with closing(sqlite3.connect(self.database)) as connection:
@@ -348,7 +345,7 @@ class WebChat:
                 self.send_header("Cache-Control", "no-store")
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.send_header("Referrer-Policy", "no-referrer")
-                self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+                self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
                 if status == 401:
                     self.send_header("WWW-Authenticate", 'Basic realm="Veyra", charset="UTF-8"')
                 self.end_headers()
@@ -384,9 +381,6 @@ class WebChat:
                 assets = {
                     "/": ("chat.html", "text/html; charset=utf-8"),
                     "/chat.css": ("chat.css", "text/css; charset=utf-8"),
-                    "/screen": ("screen.html", "text/html; charset=utf-8"),
-                    "/screen.js": ("screen.js", "text/javascript; charset=utf-8"),
-                    "/screen.css": ("screen.css", "text/css; charset=utf-8"),
                     "/dashboard": ("dashboard.html", "text/html; charset=utf-8"),
                     "/dashboard.js": ("dashboard.js", "text/javascript; charset=utf-8"),
                     "/dashboard.css": ("dashboard.css", "text/css; charset=utf-8"),
@@ -408,7 +402,7 @@ class WebChat:
                     return self.respond(403, {"error": "Send messages from the Veyra page."})
                 if not self.authenticated():
                     return self.respond(401, {"error": "Sign in with username veyra and your Veyra network password."})
-                if self.path not in ("/api/messages", "/api/password", "/api/keys", "/api/auto-approve", "/api/screen"):
+                if self.path not in ("/api/messages", "/api/password", "/api/keys", "/api/auto-approve"):
                     return self.respond(404, {"error": "Page not found."})
                 if self.path == "/api/keys" and not self.local_client():
                     return self.respond(403, {"error": "Open http://localhost:3000 on the computer running Veyra "
@@ -424,11 +418,6 @@ class WebChat:
                     payload = json.loads(self.rfile.read(length))
                 except (ValueError, UnicodeDecodeError):
                     return self.respond(400, {"error": "Invalid message."})
-                if self.path == "/api/screen":
-                    try:
-                        return self.respond(200, chat.host_screen.capture(), "image/png")
-                    except ScreenUnavailable as exc:
-                        return self.respond(503, {"error": str(exc)})
                 action = {"/api/auto-approve": chat.set_auto_approve, "/api/password": chat.change_password, "/api/keys": chat.save_api_key,
                           "/api/messages": chat.submit}[self.path]
                 status, result = action(payload)
