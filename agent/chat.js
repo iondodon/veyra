@@ -24,7 +24,6 @@ let authorization = "";
 let passwordSaving = false;
 let keySaving = false;
 let approvalSaving = false;
-let initiativeSaving = false;
 let canSaveKeys = false;
 let pollComplete = Promise.resolve();
 let followingLatest = true;
@@ -85,7 +84,7 @@ layoutObserver.observe(composerFooter);
 syncViewport();
 
 window.VeyraUpdates.configure({poll: false,
-  canReload: () => !input.value && !attachments.length && !readingImages && !posting && !passwordSaving && !keySaving && !approvalSaving && !initiativeSaving});
+  canReload: () => !input.value && !attachments.length && !readingImages && !posting && !passwordSaving && !keySaving && !approvalSaving});
 window.addEventListener("veyra:update", refreshControls);
 
 function requestHeaders(json = false) {
@@ -111,15 +110,13 @@ document.querySelector("#auto-approve-toggle").addEventListener("click", () => s
 document.querySelector("#auto-approve-off").addEventListener("click", () => setAutoApprove(false));
 
 function refreshControls() {
-  document.querySelector("#initiative-schedule").textContent = state.busy ? "Waiting for current work to finish." : state.approval_id ? "Waiting for command approval." : !state.configuration?.connected ? "Connect a model service for check-ins." : state.initiative_status || "";
   const toggle = document.querySelector("#auto-approve-toggle");
   toggle.textContent = "Auto-approve commands: " + (state.auto_approve ? "On" : "Off");
   toggle.setAttribute("aria-pressed", String(Boolean(state.auto_approve)));
   toggle.disabled = !connected || !state.ready || approvalSaving || (!state.auto_approve && (!state.configuration?.connected || Boolean(state.approval_id)));
   document.querySelector("#auto-approve-warning").hidden = !state.auto_approve;
   document.querySelector("#auto-approve-off").disabled = !connected || !state.ready || approvalSaving;
-  document.querySelector("#initiative-try").disabled = initiativeSaving || !connected || !state.ready || state.busy || Boolean(state.approval_id) || !state.configuration?.connected || Boolean(input.value) || attachments.length > 0;
-  const available = connected && state.ready && !state.busy && !posting && !passwordSaving && !keySaving && !initiativeSaving;
+  const available = connected && state.ready && !state.busy && !posting && !passwordSaving && !keySaving;
   document.querySelectorAll("#image-previews button").forEach(button => { button.disabled = posting; });
   sendButton.disabled = !available || readingImages || (!input.value.trim() && !attachments.length);
   document.querySelectorAll("[data-message]").forEach(button => { button.disabled = !available; });
@@ -302,7 +299,7 @@ async function poll() {
 }
 
 async function submit(text, approvalId = null, images = []) {
-  if (posting || !connected || !state.ready || state.busy || passwordSaving || keySaving || initiativeSaving) return;
+  if (posting || !connected || !state.ready || state.busy || passwordSaving || keySaving) return;
   posting = true;
   notice = "";
   refreshControls();
@@ -495,69 +492,3 @@ document.querySelector("#image-files").addEventListener("change", async event =>
   } catch (error) { notice = error.message; }
   finally { readingImages = false; renderAttachments(); }
 });
-
-// No draft contents are sent with scheduling heartbeats or stored in browser storage.
-const initiativeDialog = document.querySelector("#initiative-dialog");
-const initiativeForm = document.querySelector("#initiative-form");
-const initiativeStatus = document.querySelector("#initiative-status");
-document.querySelector("#initiative-open").addEventListener("click", () => {
-  const preferences = state.initiative || {enabled:false, interval_minutes:120, quiet_start:22, quiet_end:8};
-  document.querySelector("#initiative-enabled").value = String(preferences.enabled);
-  document.querySelector("#initiative-interval").value = String(preferences.interval_minutes);
-  document.querySelector("#initiative-start").value = preferences.quiet_start;
-  document.querySelector("#initiative-end").value = preferences.quiet_end;
-  initiativeStatus.textContent = "";
-  initiativeDialog.showModal();
-  refreshControls();
-});
-function closeInitiative() {
-  if (initiativeSaving) return;
-  initiativeForm.reset();
-  initiativeDialog.close();
-}
-document.querySelector("#initiative-cancel").addEventListener("click", closeInitiative);
-initiativeDialog.addEventListener("cancel", event => {event.preventDefault(); closeInitiative();});
-initiativeForm.addEventListener("submit", async event => {
-  event.preventDefault();
-  if (initiativeSaving) return;
-  initiativeSaving = true;
-  initiativeForm.querySelectorAll("input, select").forEach(field => {field.disabled = true;});
-  document.querySelector("#initiative-save").disabled = true;
-  refreshControls();
-  try {
-    const response = await fetch("/api/initiative", {method:"POST", headers:requestHeaders(true), body:JSON.stringify({
-      enabled: document.querySelector("#initiative-enabled").value === "true",
-      interval_minutes:Number(document.querySelector("#initiative-interval").value),
-      quiet_start:Number(document.querySelector("#initiative-start").value),
-      quiet_end:Number(document.querySelector("#initiative-end").value)
-    })});
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "Could not save check-in settings.");
-    state.initiative = result.initiative;
-    window.VeyraUpdates.saved(initiativeForm);
-    initiativeStatus.textContent = result.initiative.enabled ? "Check-ins enabled. The waiting period starts now." : "Check-ins paused.";
-  } catch (error) {initiativeStatus.textContent = error.message;}
-  finally {initiativeSaving = false; initiativeForm.querySelectorAll("input, select").forEach(field => {field.disabled = false;}); document.querySelector("#initiative-save").disabled = false; refreshControls();}
-});
-async function requestCheckIn(manual = false) {
-  const available = !document.hidden && connected && state.ready && !state.busy && !state.approval_id &&
-    state.configuration?.connected && !input.value && !attachments.length && !readingImages &&
-    !posting && !passwordSaving && !keySaving && !approvalSaving && !initiativeSaving &&
-    !window.VeyraUpdates.pending && (manual || !document.querySelector("dialog[open]"));
-  if (!available || (!manual && !state.initiative?.enabled)) return;
-  initiativeSaving = true;
-  refreshControls();
-  try {
-    const response = await fetch("/api/check-in", {method:"POST", headers:requestHeaders(true),
-      body:JSON.stringify({manual, available:true})});
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "Could not start a check-in.");
-    if (result.started) {state.busy = true; if (manual) initiativeStatus.textContent = "Veyra is considering a check-in. Look in Chat when it finishes.";}
-    else if (manual) initiativeStatus.textContent = "Not started. Connect a service, finish current work, or wait a minute after the last check-in.";
-  } catch (error) {if (manual) initiativeStatus.textContent = error.message;}
-  finally {initiativeSaving = false; refreshControls();}
-}
-document.querySelector("#initiative-try").addEventListener("click", () => requestCheckIn(true));
-window.setInterval(() => requestCheckIn(false), 60000);
-
-document.addEventListener("visibilitychange", () => {if (!document.hidden) requestCheckIn(false);});

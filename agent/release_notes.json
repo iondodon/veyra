@@ -1,9 +1,9 @@
 {
-  "summary": "Conversation initiative now retries empty check-in attempts, works with the Settings menu open, and shows its scheduling status.",
-  "instructions": "Open Chat \u2192 Settings \u2192 Conversation initiative. Your saved enabled/paused choice, interval, and quiet hours are unchanged. The live status explains the remaining inactivity wait, quiet hours on the host computer, or waiting for your reply. The timer restarts after each chat turn (including command approvals) finishes and after saving settings. To test automatically, select 15 minutes, save, close the dialog, and leave Chat visible with no draft, work, or approvals for that interval; the Settings menu itself can stay open. Try a check-in now bypasses the interval and quiet hours and uses your selected model service once. The model may choose not to send a message; automatic attempts then wait another interval and retry instead of becoming permanently blocked. Once a check-in message is delivered, no further automatic nudge is sent until you speak again. API calls may incur charges. All 168 Python tests, the self-test, initiative browser tests at desktop/mobile widths, and chat layout tests passed.",
+  "summary": "Removed Conversation initiative and all automatic and manual check-ins.",
+  "instructions": "Open Chat: Conversation initiative is no longer in Settings, and Veyra will not start scheduled conversations or make check-in model requests, even if you previously enabled the feature. Existing chat history, service selection, and credentials are unchanged. Older open pages update through the shared update monitor after restart; unsent drafts and private forms are preserved until you finish editing. Tested with 158 Python tests, the self-test, JavaScript syntax checks, desktop/mobile chat runtime checks, and full-width scrolling/layout checks at four screen widths.",
   "links": [
     {
-      "label": "Chat and initiative settings",
+      "label": "Chat",
       "path": "/"
     }
   ]

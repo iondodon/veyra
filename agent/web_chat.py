@@ -15,7 +15,6 @@ import threading
 from urllib.parse import parse_qs, urlsplit
 
 from task_progress import TaskProgress
-from initiative import Initiative
 
 from images import validate_images, MAX_REQUEST_BYTES
 from system_dashboard import SystemDashboard
@@ -56,10 +55,6 @@ class WebChat:
                 "SELECT value FROM settings WHERE name = 'network_password'"
             ).fetchone()[0]
         self.database.chmod(0o600)
-        self.initiative = Initiative(self.database)
-        self.checkin_cancelled = False
-        self.current_checkin = False
-        self.checkin_user_id = 0
         self.lock = threading.RLock()
         self.process = None
         self.inbox = queue.Queue()
@@ -121,8 +116,7 @@ class WebChat:
                 "status": {"auto_approve": self.auto_approve, "ready": self.ready, "busy": self.busy, "approval_id": self.approval_id,
                            "password_is_default": self.network_password == DEFAULT_PASSWORD,
                            "session_id": self.session_id, "ui_version": self.ui_version,
-                           "configuration": dict(self.configuration), "initiative": self.initiative.settings(),
-                           "initiative_status": self.initiative.status(self.latest_user_id())},
+                           "configuration": dict(self.configuration)},
             }
 
     def set_auto_approve(self, payload):
@@ -138,51 +132,6 @@ class WebChat:
             self.auto_approval_id = None
             self.publish("Auto-approve commands " + ("enabled for this session. New shell requests will run without confirmation." if enabled else "disabled. Commands already running are not stopped."), kind="notice")
             return 200, {"ok": True, "auto_approve": enabled}
-
-    def latest_user_id(self):
-        with closing(sqlite3.connect(self.database)) as db:
-            row = db.execute("SELECT MAX(id) FROM events WHERE json_extract(payload, '$.role') = 'user'").fetchone()
-        return row[0] or 0
-
-    def configure_initiative(self, payload):
-        with self.lock:
-            try:
-                self.initiative.configure(payload)
-            except ValueError as exc:
-                return 400, {"error": str(exc)}
-            if not self.initiative.data['enabled']:
-                self.checkin_cancelled = True
-            return 200, {"ok": True, "initiative": self.initiative.settings()}
-
-    def check_in(self, payload):
-        if not isinstance(payload, dict) or type(payload.get('manual')) is not bool:
-            return 400, {"error": "Invalid check-in request."}
-        with self.lock:
-            if (not self.ready or self.busy or self.approval_id or
-                    not self.configuration.get('connected')):
-                return 200, {"started": False}
-            # The browser reports eligibility without sending draft contents.
-            if payload.get('available') is not True:
-                return 200, {"started": False}
-            user_id = self.latest_user_id()
-            if not self.initiative.due(user_id, manual=payload['manual']):
-                return 200, {"started": False}
-            self.initiative.reserve(user_id, delivered=False)
-            self.checkin_user_id = user_id
-            self.checkin_cancelled = False
-            self.current_checkin = True
-            self.busy = True
-            message = {"text": "", "initiative": True, "context": self.context_window()}
-            if self.process is None:
-                self.inbox.put(message)
-            else:
-                try:
-                    self.process.stdin.write(json.dumps(message) + "\n")
-                    self.process.stdin.flush()
-                except (OSError, ValueError):
-                    self.detach()
-                    return 503, {"error": "Veyra is restarting."}
-            return 202, {"started": True}
 
     def key_settings(self, local):
         env = self.credentials.environment()
@@ -279,10 +228,6 @@ class WebChat:
         self.progress.event(clean_event)
         kind = event["type"]
         if kind == "message":
-            if event.get("kind") == "checkin" and self.checkin_cancelled:
-                return
-            if event.get("kind") == "checkin" and self.current_checkin:
-                self.initiative.delivered(self.checkin_user_id)
             role = event.get("role", "assistant")
             self.publish(event["text"], role=role if role in ("assistant", "tool", "system") else "assistant",
                          kind=event.get("kind", "message"),
@@ -310,9 +255,6 @@ class WebChat:
                              links=self.release_notes["links"])
                 self.release_announced = True
         elif kind == "done":
-            if self.busy and not self.current_checkin:
-                self.initiative.interacted()
-            self.current_checkin = False
             self.busy = False
             if self.auto_approve and self.auto_approval_id and self.auto_approval_id == self.approval_id:
                 approval_id = self.auto_approval_id
@@ -345,8 +287,6 @@ class WebChat:
             approval = text.lower().rstrip(".!").strip()
             if approval in ("/approve", "/deny", "approve", "deny", "approve these commands", "deny these commands") and (not self.approval_id or approval_id != self.approval_id):
                 return 409, {"error": "That command request is no longer active."}
-            self.initiative.interacted()
-            self.current_checkin = False
             self.progress.start(text, continuation=bool(self.approval_id))
             self.busy = True
             self.publish(text, role="user", images=images)
@@ -495,7 +435,7 @@ class WebChat:
                     return self.respond(403, {"error": "Send messages from the Veyra page."})
                 if not self.authenticated():
                     return self.respond(401, {"error": "Sign in with username veyra and your Veyra network password."})
-                if self.path not in ("/api/messages", "/api/password", "/api/keys", "/api/auto-approve", "/api/initiative", "/api/check-in"):
+                if self.path not in ("/api/messages", "/api/password", "/api/keys", "/api/auto-approve"):
                     return self.respond(404, {"error": "Page not found."})
                 if self.path == "/api/keys" and not self.local_client():
                     return self.respond(403, {"error": "Open http://localhost:3000 on the computer running Veyra "
@@ -511,7 +451,7 @@ class WebChat:
                     payload = json.loads(self.rfile.read(length))
                 except (ValueError, UnicodeDecodeError):
                     return self.respond(400, {"error": "Invalid message."})
-                action = {"/api/initiative": chat.configure_initiative, "/api/check-in": chat.check_in, "/api/auto-approve": chat.set_auto_approve, "/api/password": chat.change_password, "/api/keys": chat.save_api_key,
+                action = {"/api/auto-approve": chat.set_auto_approve, "/api/password": chat.change_password, "/api/keys": chat.save_api_key,
                           "/api/messages": chat.submit}[self.path]
                 status, result = action(payload)
                 self.respond(status, result)

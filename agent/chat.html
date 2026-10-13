@@ -35,7 +35,6 @@
         <button type="button" data-message="Use the OpenAI API.">Use OpenAI API</button>
         <button type="button" data-message="Use the Anthropic API.">Use Anthropic API</button>
         <button id="auto-approve-toggle" type="button" aria-pressed="false" disabled>Auto-approve commands: Off</button>
-        <button type="button" id="initiative-open">Conversation initiative</button>
         <button type="button" data-api-keys>API keys</button>
         <button type="button" data-message="Log out.">Disconnect current service</button>
         <button type="button" data-password-settings>Change password</button>
@@ -93,28 +92,6 @@
         <button id="api-cancel" type="button">Close</button>
         <button id="api-save" type="submit" disabled>Save key</button>
       </div>
-    </form>
-  </dialog>
-  <dialog id="initiative-dialog" aria-labelledby="initiative-title">
-    <form id="initiative-form" class="password-form">
-      <h2 id="initiative-title">Conversation initiative</h2>
-      <p>Let Veyra occasionally start a conversation: follow up on your chat, offer an idea, or ask a friendly question. Off until you enable it.</p>
-      <p>Uses your selected model service and recent chat context. <strong>API calls may incur charges.</strong> Check-ins cannot run commands.</p>
-      <label for="initiative-enabled">Check-ins</label>
-      <select id="initiative-enabled"><option value="false">Paused</option><option value="true">Enabled</option></select>
-      <label for="initiative-interval">Minimum time after a conversation</label>
-      <select id="initiative-interval"><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">1 hour</option><option value="120">2 hours</option><option value="240">4 hours</option></select>
-      <label for="initiative-start">Quiet hours start (0–23)</label>
-      <input id="initiative-start" type="number" min="0" max="23" required>
-      <label for="initiative-end">Quiet hours end (0–23)</label>
-      <input id="initiative-end" type="number" min="0" max="23" required>
-      <p>The interval restarts after a chat turn finishes, including command approvals, and after saving these settings. Leave Chat open and idle to allow automatic check-ins.</p>
-      <p>Times use the clock on Veyra’s computer. Equal start and end means no quiet hours. Automatic check-ins only happen while Chat is visible, with no draft, open dialog, work, or pending approval. No further automatic nudge until you send another message. No notifications outside the app.</p>
-      <p>“Try now” uses the model once, even when paused or during quiet hours. It leaves these settings unchanged. The model may decide there is nothing useful to add; automatic checks then retry after another interval.</p>
-      <p id="initiative-schedule" role="status"></p>
-      <p id="initiative-status" role="status"></p>
-      <button id="initiative-try" type="button">Try a check-in now</button>
-      <div class="password-actions"><button id="initiative-cancel" type="button">Cancel</button><button id="initiative-save" type="submit">Save</button></div>
     </form>
   </dialog>
 </body>
