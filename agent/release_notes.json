@@ -1,14 +1,5 @@
 {
-  "summary": "Removed the Versions page, its navigation links, and its timeline API. Git history and recovery controls are unchanged.",
-  "instructions": "Open Chat or Dashboard: Versions no longer appears in navigation. Old /versions bookmarks and /api/versions requests return not found. Open pages update after restart through the existing shared monitor, without discarding unfinished drafts or private forms. Verified with all 153 Python tests, the self-test, desktop/mobile chat runtime checks, and four-width layout checks.",
-  "links": [
-    {
-      "label": "Chat",
-      "path": "/"
-    },
-    {
-      "label": "Dashboard",
-      "path": "/dashboard"
-    }
-  ]
+  "summary": "Shortened the README to a focused quick-start guide, pushed the change to origin/main, and rebased local onto main while preserving its existing app changes.",
+  "instructions": "Read README.md for starting Veyra, choosing a service in Settings, and stopping or recovering it. The rebased local app passed all 153 Python tests and matches the previous app code. Only main was pushed; local remains unpushed.",
+  "links": []
 }
