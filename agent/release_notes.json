@@ -1,6 +1,6 @@
 {
-  "summary": "Chat now renders assistant replies as sanitized Markdown, including headings, lists, emphasis, quotes, tables, links, and code blocks. User messages, command approvals, and command output remain plain text.",
-  "instructions": "Open Chat and ask for a heading, a bulleted list, and a fenced code example. Earlier assistant replies also render when the conversation loads. External HTTP(S) links open safely in a new tab; local links stay in Veyra. Scripts, embedded forms, unsafe links, and remote Markdown images are blocked. Code blocks and tables scroll horizontally on narrow screens. Draft protection and automatic version updates are unchanged. Formatting/security tests, JavaScript syntax checks, and all 157 Python tests passed.",
+  "summary": "Cleaned up the chat composer: consistent Image and Send buttons, clearer placeholder and helper text, and a readable auto-approve warning aligned with the message input.",
+  "instructions": "Open Chat to see the updated composer. Type a draft to check the focus styling and send-button states. In Settings, the auto-approve status now appears in an amber panel with a matching Turn off button when enabled; enabling auto-approve allows shell commands without confirmation. Desktop and mobile layout tests passed at 1905, 1024, 390, and 320px, along with Markdown security tests and all 157 Python tests. Draft handling, approval behavior, and automatic version updates are unchanged.",
   "links": [
     {
       "label": "Chat",
