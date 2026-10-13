@@ -1,10 +1,5 @@
 {
-  "summary": "Added a free Expo Go iPhone development client with chat, automatic reply updates, image display, and confirmed command approvals. Added iPhone app setup navigation to the web app.",
-  "instructions": "Install Expo Go on your iPhone and keep it on the same trusted Wi-Fi as Veyra. The development server has been started for this session at exp://192.168.1.9:8081. Open that address in Expo Go, then enter http://192.168.1.9:3000 and your Veyra network password (not your ChatGPT password or API key). The initial network password is veyra; change it in web Settings. See iPhone app for restarting development mode, privacy, and troubleshooting. Chat uses session-scoped polling, not token streaming. Tested: 154 Python tests, 5 mobile client tests, TypeScript checks, iOS bundle export, markdown tests, and desktop/mobile browser regressions. Physical iPhone testing remains to be done. Expo dependencies currently report 22 audit advisories; do not expose development ports to the internet.",
-  "links": [
-    {
-      "label": "iPhone app setup",
-      "path": "/mobile"
-    }
-  ]
+  "summary": "Removed the Expo Go client and iPhone setup page, restoring the web app to its previous version.",
+  "instructions": "Continue using the existing web chat. The iPhone app navigation and /mobile setup page have been removed. Saved conversations, settings, and service credentials are unchanged.",
+  "links": []
 }
