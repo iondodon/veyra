@@ -1,5 +1,10 @@
 {
-  "summary": "Shortened the README to a focused quick-start guide, pushed the change to origin/main, and rebased local onto main while preserving its existing app changes.",
-  "instructions": "Read README.md for starting Veyra, choosing a service in Settings, and stopping or recovering it. The rebased local app passed all 153 Python tests and matches the previous app code. Only main was pushed; local remains unpushed.",
-  "links": []
+  "summary": "Added a free Expo Go iPhone development client with chat, automatic reply updates, image display, and confirmed command approvals. Added iPhone app setup navigation to the web app.",
+  "instructions": "Install Expo Go on your iPhone and keep it on the same trusted Wi-Fi as Veyra. The development server has been started for this session at exp://192.168.1.9:8081. Open that address in Expo Go, then enter http://192.168.1.9:3000 and your Veyra network password (not your ChatGPT password or API key). The initial network password is veyra; change it in web Settings. See iPhone app for restarting development mode, privacy, and troubleshooting. Chat uses session-scoped polling, not token streaming. Tested: 154 Python tests, 5 mobile client tests, TypeScript checks, iOS bundle export, markdown tests, and desktop/mobile browser regressions. Physical iPhone testing remains to be done. Expo dependencies currently report 22 audit advisories; do not expose development ports to the internet.",
+  "links": [
+    {
+      "label": "iPhone app setup",
+      "path": "/mobile"
+    }
+  ]
 }

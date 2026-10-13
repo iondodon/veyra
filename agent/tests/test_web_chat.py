@@ -25,6 +25,17 @@ class WebChatTests(unittest.TestCase):
         self.processes = []
         self.addCleanup(self.stop_agents)
 
+    def test_mobile_setup_is_navigable_and_versioned(self):
+        for path in ('/', '/dashboard'):
+            status, page = self.request('GET', path)
+            self.assertEqual(status, 200)
+            self.assertIn(b'href="/mobile"', page)
+        status, page = self.request('GET', '/mobile')
+        self.assertEqual(status, 200)
+        self.assertIn(b'/app-updates.js', page)
+        self.assertIn(self.chat.ui_version.encode(), page)
+        self.assertIn(b'HTTP sends messages', page)
+
     def test_markdown_assets_are_served_and_versioned(self):
         status, page = self.request("GET", "/")
         self.assertEqual(status, 200)

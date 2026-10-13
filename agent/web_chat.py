@@ -35,7 +35,7 @@ class WebChat:
         self.assets = {filename: (ASSETS / filename).read_bytes()
                        for filename in ("chat.html", "chat.js", "chat.css", "app_updates.js",
                                         "marked.js", "purify.js", "chat-markdown.js",
-                                        "dashboard.html", "dashboard.js", "dashboard.css")}
+                                        "dashboard.html", "dashboard.js", "dashboard.css", "mobile.html")}
         directory = Path(root) / "state/chat"
         directory.mkdir(parents=True, exist_ok=True)
         directory.chmod(0o700)
@@ -382,6 +382,7 @@ class WebChat:
                     "/": ("chat.html", "text/html; charset=utf-8"),
                     "/chat.css": ("chat.css", "text/css; charset=utf-8"),
                     "/dashboard": ("dashboard.html", "text/html; charset=utf-8"),
+                    "/mobile": ("mobile.html", "text/html; charset=utf-8"),
                     "/dashboard.js": ("dashboard.js", "text/javascript; charset=utf-8"),
                     "/dashboard.css": ("dashboard.css", "text/css; charset=utf-8"),
                     "/marked.js": ("marked.js", "text/javascript; charset=utf-8"),
