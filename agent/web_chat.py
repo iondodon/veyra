@@ -59,6 +59,7 @@ class WebChat:
         self.initiative = Initiative(self.database)
         self.checkin_cancelled = False
         self.current_checkin = False
+        self.checkin_user_id = 0
         self.lock = threading.RLock()
         self.process = None
         self.inbox = queue.Queue()
@@ -120,7 +121,8 @@ class WebChat:
                 "status": {"auto_approve": self.auto_approve, "ready": self.ready, "busy": self.busy, "approval_id": self.approval_id,
                            "password_is_default": self.network_password == DEFAULT_PASSWORD,
                            "session_id": self.session_id, "ui_version": self.ui_version,
-                           "configuration": dict(self.configuration), "initiative": self.initiative.settings()},
+                           "configuration": dict(self.configuration), "initiative": self.initiative.settings(),
+                           "initiative_status": self.initiative.status(self.latest_user_id())},
             }
 
     def set_auto_approve(self, payload):
@@ -136,6 +138,11 @@ class WebChat:
             self.auto_approval_id = None
             self.publish("Auto-approve commands " + ("enabled for this session. New shell requests will run without confirmation." if enabled else "disabled. Commands already running are not stopped."), kind="notice")
             return 200, {"ok": True, "auto_approve": enabled}
+
+    def latest_user_id(self):
+        with closing(sqlite3.connect(self.database)) as db:
+            row = db.execute("SELECT MAX(id) FROM events WHERE json_extract(payload, '$.role') = 'user'").fetchone()
+        return row[0] or 0
 
     def configure_initiative(self, payload):
         with self.lock:
@@ -157,12 +164,11 @@ class WebChat:
             # The browser reports eligibility without sending draft contents.
             if payload.get('available') is not True:
                 return 200, {"started": False}
-            with closing(sqlite3.connect(self.database)) as db:
-                rows = db.execute("SELECT id,payload FROM events ORDER BY id DESC")
-                user_id = next((i for i, raw in rows if json.loads(raw).get('role') == 'user'), 0)
+            user_id = self.latest_user_id()
             if not self.initiative.due(user_id, manual=payload['manual']):
                 return 200, {"started": False}
-            self.initiative.reserve(user_id)
+            self.initiative.reserve(user_id, delivered=False)
+            self.checkin_user_id = user_id
             self.checkin_cancelled = False
             self.current_checkin = True
             self.busy = True
@@ -275,6 +281,8 @@ class WebChat:
         if kind == "message":
             if event.get("kind") == "checkin" and self.checkin_cancelled:
                 return
+            if event.get("kind") == "checkin" and self.current_checkin:
+                self.initiative.delivered(self.checkin_user_id)
             role = event.get("role", "assistant")
             self.publish(event["text"], role=role if role in ("assistant", "tool", "system") else "assistant",
                          kind=event.get("kind", "message"),

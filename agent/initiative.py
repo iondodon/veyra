@@ -42,20 +42,37 @@ class Initiative:
         self.data['last_interaction'] = time.time() if now is None else now
         self.persist()
 
-    def due(self, user_id, *, now=None, hour=None, manual=False):
+    def status(self, user_id, *, now=None, hour=None, manual=False):
         now = time.time() if now is None else now
         if now - self.data['last_attempt'] < 60:
-            return False
+            return "Waiting a minute after the last check-in request."
         if manual:
-            return True
-        if not self.data['enabled'] or not user_id or user_id <= self.data['last_user_id']:
-            return False
+            return "Ready for a manual check-in."
+        if not self.data['enabled']:
+            return "Check-ins paused."
+        if not user_id:
+            return "Send a chat message first so Veyra has something to follow up on."
+        if user_id <= self.data['last_user_id']:
+            return "Waiting for your reply to the last check-in."
         hour = datetime.fromtimestamp(now).hour if hour is None else hour
         start, end = self.data['quiet_start'], self.data['quiet_end']
         quiet = (start <= hour < end) if start < end else (hour >= start or hour < end) if start > end else False
-        interval = self.data['interval_minutes'] * 60
-        return not quiet and now - max(self.data['last_attempt'], self.data['last_interaction']) >= interval
+        if quiet:
+            return f"Quiet hours on Veyra’s computer; end at {end:02d}:00."
+        remaining = self.data['interval_minutes'] * 60 - (now - max(self.data['last_attempt'], self.data['last_interaction']))
+        if remaining > 0:
+            return f"Next check-in eligible in about {max(1, int((remaining + 59) // 60))} minute(s) of inactivity."
+        return "Ready for an automatic check-in while Chat is visible and idle."
 
-    def reserve(self, user_id, now=None):
-        self.data.update(last_attempt=time.time() if now is None else now, last_user_id=user_id)
+    def due(self, user_id, *, now=None, hour=None, manual=False):
+        return self.status(user_id, now=now, hour=hour, manual=manual).startswith('Ready for')
+
+    def reserve(self, user_id, now=None, *, delivered=True):
+        self.data['last_attempt'] = time.time() if now is None else now
+        if delivered:
+            self.data['last_user_id'] = user_id
+        self.persist()
+
+    def delivered(self, user_id):
+        self.data['last_user_id'] = user_id
         self.persist()

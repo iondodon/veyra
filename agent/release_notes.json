@@ -1,9 +1,9 @@
 {
-  "summary": "Chat now scrolls across the full window, with its scrollbar at the far right while messages remain centered and readable.",
-  "instructions": "Open Chat and scroll a long conversation. The scrolling area spans the screen instead of stopping at the narrow message column; the composer stays at the bottom. Desktop and mobile widths (1905, 1024, 390 and 320 pixels), independent scrolling, draft preservation, and approval-warning layout were browser-tested. All 166 Python tests and the self-test passed in the project runtime. Existing draft protection and automatic version updates are unchanged.",
+  "summary": "Conversation initiative now retries empty check-in attempts, works with the Settings menu open, and shows its scheduling status.",
+  "instructions": "Open Chat \u2192 Settings \u2192 Conversation initiative. Your saved enabled/paused choice, interval, and quiet hours are unchanged. The live status explains the remaining inactivity wait, quiet hours on the host computer, or waiting for your reply. The timer restarts after each chat turn (including command approvals) finishes and after saving settings. To test automatically, select 15 minutes, save, close the dialog, and leave Chat visible with no draft, work, or approvals for that interval; the Settings menu itself can stay open. Try a check-in now bypasses the interval and quiet hours and uses your selected model service once. The model may choose not to send a message; automatic attempts then wait another interval and retry instead of becoming permanently blocked. Once a check-in message is delivered, no further automatic nudge is sent until you speak again. API calls may incur charges. All 168 Python tests, the self-test, initiative browser tests at desktop/mobile widths, and chat layout tests passed.",
   "links": [
     {
-      "label": "Chat",
+      "label": "Chat and initiative settings",
       "path": "/"
     }
   ]

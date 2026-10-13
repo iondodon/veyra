@@ -108,8 +108,10 @@
       <input id="initiative-start" type="number" min="0" max="23" required>
       <label for="initiative-end">Quiet hours end (0–23)</label>
       <input id="initiative-end" type="number" min="0" max="23" required>
+      <p>The interval restarts after a chat turn finishes, including command approvals, and after saving these settings. Leave Chat open and idle to allow automatic check-ins.</p>
       <p>Times use the clock on Veyra’s computer. Equal start and end means no quiet hours. Automatic check-ins only happen while Chat is visible, with no draft, open dialog, work, or pending approval. No further automatic nudge until you send another message. No notifications outside the app.</p>
-      <p>“Try now” uses the model once, even when paused or during quiet hours. It leaves these settings unchanged. The model may decide there is nothing useful to add.</p>
+      <p>“Try now” uses the model once, even when paused or during quiet hours. It leaves these settings unchanged. The model may decide there is nothing useful to add; automatic checks then retry after another interval.</p>
+      <p id="initiative-schedule" role="status"></p>
       <p id="initiative-status" role="status"></p>
       <button id="initiative-try" type="button">Try a check-in now</button>
       <div class="password-actions"><button id="initiative-cancel" type="button">Cancel</button><button id="initiative-save" type="submit">Save</button></div>

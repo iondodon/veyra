@@ -111,6 +111,7 @@ document.querySelector("#auto-approve-toggle").addEventListener("click", () => s
 document.querySelector("#auto-approve-off").addEventListener("click", () => setAutoApprove(false));
 
 function refreshControls() {
+  document.querySelector("#initiative-schedule").textContent = state.busy ? "Waiting for current work to finish." : state.approval_id ? "Waiting for command approval." : !state.configuration?.connected ? "Connect a model service for check-ins." : state.initiative_status || "";
   const toggle = document.querySelector("#auto-approve-toggle");
   toggle.textContent = "Auto-approve commands: " + (state.auto_approve ? "On" : "Off");
   toggle.setAttribute("aria-pressed", String(Boolean(state.auto_approve)));
@@ -542,8 +543,7 @@ async function requestCheckIn(manual = false) {
   const available = !document.hidden && connected && state.ready && !state.busy && !state.approval_id &&
     state.configuration?.connected && !input.value && !attachments.length && !readingImages &&
     !posting && !passwordSaving && !keySaving && !approvalSaving && !initiativeSaving &&
-    !window.VeyraUpdates.pending && (manual || !document.querySelector("dialog[open]")) &&
-    (manual || !document.querySelector("details[open]"));
+    !window.VeyraUpdates.pending && (manual || !document.querySelector("dialog[open]"));
   if (!available || (!manual && !state.initiative?.enabled)) return;
   initiativeSaving = true;
   refreshControls();
@@ -559,3 +559,5 @@ async function requestCheckIn(manual = false) {
 }
 document.querySelector("#initiative-try").addEventListener("click", () => requestCheckIn(true));
 window.setInterval(() => requestCheckIn(false), 60000);
+
+document.addEventListener("visibilitychange", () => {if (!document.hidden) requestCheckIn(false);});

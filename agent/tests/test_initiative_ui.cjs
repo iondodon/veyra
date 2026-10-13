@@ -22,7 +22,7 @@ const root = path.resolve(__dirname, '..');
         const json = data => route.fulfill({json:data});
         if(url.pathname === '/api/events') return json({events:[], cursor:0, has_more:false, status:{
           ready:true, busy:false, approval_id:null, session_id:'test', ui_version:'test',
-          password_is_default:false, initiative:preferences, configuration:{connected:true, provider:'chatgpt', model:'fixture'}}});
+          password_is_default:false, initiative:preferences, initiative_status:'Next check-in eligible in about 15 minute(s) of inactivity.', configuration:{connected:true, provider:'chatgpt', model:'fixture'}}});
         if(url.pathname === '/api/initiative') {preferences = route.request().postDataJSON(); return json({ok:true, initiative:preferences});}
         if(url.pathname === '/api/check-in') {calls++; return json({started:true});}
         if(url.pathname === '/api/app-version') return json({ready:true, ui_version:'test'});
@@ -36,6 +36,7 @@ const root = path.resolve(__dirname, '..');
       await page.locator('#connection').filter({hasText:'Connected'}).waitFor();
       await page.locator('summary').click();
       await page.locator('#initiative-open').click();
+      assert.match(await page.locator('#initiative-schedule').textContent(), /15 minute/);
       await page.locator('#initiative-enabled').selectOption('true');
       await page.locator('#initiative-interval').selectOption('15');
       await page.locator('#initiative-save').click();
@@ -47,12 +48,16 @@ const root = path.resolve(__dirname, '..');
       await page.locator('#initiative-status').filter({hasText:'considering'}).waitFor();
       assert.equal(calls, 1);
       await page.locator('#initiative-cancel').click();
+      await page.waitForTimeout(600);
+      await page.evaluate(() => window.testHeartbeat());
+      await page.waitForTimeout(100);
+      assert.equal(calls, 2, 'An open Settings menu must not silently block automatic check-ins');
       await page.locator('summary').click();
       await page.waitForTimeout(600);
       await page.locator('#message').fill('Keep this draft');
       await page.evaluate(() => window.testHeartbeat());
       await page.waitForTimeout(100);
-      assert.equal(calls, 1, 'Draft must suppress check-in');
+      assert.equal(calls, 2, 'Draft must suppress check-in');
       await page.locator('summary').click();
       await page.locator('#initiative-open').click();
       assert.equal(await page.locator('#initiative-try').isDisabled(), true);

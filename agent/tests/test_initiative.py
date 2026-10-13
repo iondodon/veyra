@@ -85,12 +85,38 @@ class InitiativeTests(unittest.TestCase):
         with patch('initiative.time.time', return_value=4000), patch('initiative.datetime') as clock:
             clock.fromtimestamp.return_value.hour = 12
             self.assertEqual(self.chat.check_in({'manual':False, 'available':True})[0], 202)
+        self.chat.agent_event({'type':'message', 'kind':'checkin', 'text':'How is the project going?'})
         self.chat.agent_event({'type':'done'})
         with patch('initiative.time.time', return_value=9000), patch('initiative.datetime') as clock:
             clock.fromtimestamp.return_value.hour = 12
             self.assertEqual(self.chat.check_in({'manual':False, 'available':True}), (200, {'started':False}))
             self.chat.configuration['connected'] = False
             self.assertFalse(self.chat.check_in({'manual':True, 'available':True})[1]['started'])
+
+    def test_empty_attempt_retries_without_blocking_for_reply(self):
+        self.enable()
+        self.chat.ready = True
+        self.chat.configuration['connected'] = True
+        self.chat.publish('A project', role='user')
+        with patch('initiative.time.time', return_value=4000), patch('initiative.datetime') as clock:
+            clock.fromtimestamp.return_value.hour = 12
+            self.assertEqual(self.chat.check_in({'manual':False, 'available':True})[0], 202)
+            self.chat.agent_event({'type':'done'})
+            self.assertIn('minute', self.schedule.status(self.chat.latest_user_id(), now=4100, hour=12))
+        restored = Initiative(self.chat.database)
+        self.assertTrue(restored.due(self.chat.latest_user_id(), now=4900, hour=12))
+        with patch('initiative.time.time', return_value=4900), patch('initiative.datetime') as clock:
+            clock.fromtimestamp.return_value.hour = 12
+            self.assertEqual(self.chat.check_in({'manual':False, 'available':True})[0], 202)
+
+    def test_status_explains_paused_quiet_wait_and_reply(self):
+        self.assertIn('paused', self.schedule.status(5, now=4000, hour=12))
+        self.enable()
+        self.assertIn('Quiet hours', self.schedule.status(5, now=4000, hour=23))
+        self.assertIn('inactivity', self.schedule.status(5, now=1100, hour=12))
+        self.schedule.reserve(5, now=1900)
+        self.assertIn('reply', self.schedule.status(5, now=4000, hour=12))
+        self.assertIn('initiative_status', self.chat.snapshot(0)['status'])
 
     def test_pause_suppresses_inflight_checkin(self):
         self.chat.configure_initiative(dict(enabled=False, interval_minutes=120, quiet_start=22, quiet_end=8))
