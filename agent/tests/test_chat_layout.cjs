@@ -15,6 +15,9 @@ const root = path.resolve(__dirname, '..');
         .replace('<link rel="stylesheet" href="/chat.css">', `<style>${fs.readFileSync(path.join(root, 'chat.css'), 'utf8')}</style>`);
       await page.setContent(html);
       await page.locator('#message').fill('An unsent draft');
+      await page.evaluate(() => {
+        document.querySelector('#messages').innerHTML = Array.from({length: 40}, () => '<div class="message"><div class="body">A message to exercise full-window scrolling.</div></div>').join('');
+      });
       for (const warningVisible of [false, true]) {
         await page.evaluate(visible => { document.querySelector('#auto-approve-warning').hidden = !visible; }, warningVisible);
         const layout = await page.evaluate(() => {
@@ -23,10 +26,19 @@ const root = path.resolve(__dirname, '..');
             return {left:r.left, right:r.right, top:r.top, bottom:r.bottom, height:r.height};
           };
           return {composer:box('#composer'), warning:box('#auto-approve-warning'),
-            attach:box('#attach'), send:box('#send'), conversation:box('#conversation'), footer:box('footer'),
+            attach:box('#attach'), send:box('#send'), conversation:box('#conversation'), messages:box('#messages'), footer:box('footer'),
             overflow:document.documentElement.scrollWidth > innerWidth,
             warningDisplay:getComputedStyle(document.querySelector('#auto-approve-warning')).display};
         });
+        assert(Math.abs(layout.conversation.left) < 1, `scroll left edge at ${width}`);
+        assert(Math.abs(layout.conversation.right - width) < 1, `scroll right edge at ${width}`);
+        assert(layout.messages.right - layout.messages.left <= 757, 'readable message width');
+        const scrolling = await page.evaluate(() => {
+          const conversation = document.querySelector('#conversation');
+          conversation.scrollTop = conversation.scrollHeight;
+          return conversation.scrollTop > 0 && document.scrollingElement.scrollTop === 0;
+        });
+        assert(scrolling, 'conversation scrolls independently');
         assert.equal(layout.overflow, false, `overflow at ${width}`);
         assert(layout.conversation.bottom <= layout.footer.top + 1);
         assert(layout.composer.bottom <= 800);
