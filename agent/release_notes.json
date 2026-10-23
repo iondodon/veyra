@@ -1,14 +1,10 @@
 {
-  "summary": "Rolled back the host-screen viewer and restored the previous web interface.",
-  "instructions": "The View host screen button and desktop capture endpoints have been removed. After the app restarts, the menu updates automatically when no edits are pending. Your conversations, settings, and service login are unchanged.",
+  "summary": "Veyra now remembers browser sign-in across app and computer restarts.",
+  "instructions": "Sign in once with your Veyra network username and password. Keep cookies enabled and use the same browser and Veyra address: sign-in is remembered for up to 180 days. Restart Veyra or your PC and reopen that address to test. Clearing cookies, private browsing, expiry, or changing your password can require another login. Settings \u2192 Change password invalidates previous remembered logins. ChatGPT sign-in is separate and unchanged.",
   "links": [
     {
-      "label": "Chat",
+      "label": "Chat and Settings",
       "path": "/"
-    },
-    {
-      "label": "Dashboard",
-      "path": "/dashboard"
     }
   ]
 }

@@ -362,6 +362,43 @@ for line in sys.stdin:
             self.assertEqual(self.request("POST", "/api/messages", {"text": "hello"},
                              {"Authorization": credential})[0], 202)
 
+    def test_remembered_browser_survives_restart_and_password_revokes(self):
+        handler = self.chat.server.RequestHandlerClass
+        credential = "Basic " + base64.b64encode(b"veyra:veyra").decode()
+        with patch.object(handler, "local_client", return_value=False):
+            c = http.client.HTTPConnection("127.0.0.1", self.port)
+            c.request("GET", "/", headers={"Authorization": credential})
+            response = c.getresponse()
+            self.assertEqual(response.status, 200)
+            cookie = response.getheader("Set-Cookie")
+            response.read()
+            c.close()
+            self.assertIn("HttpOnly", cookie)
+            self.assertIn("SameSite=Strict", cookie)
+            self.assertIn("Max-Age=15552000", cookie)
+            cookie = cookie.split(";", 1)[0]
+            self.assertEqual(self.request("GET", "/", headers={"Cookie": cookie})[0], 200)
+            self.assertEqual(self.request("GET", "/", headers={"Cookie": cookie + "bad"})[0], 401)
+            self.assertEqual(self.request("POST", "/api/password", {},
+                             {"Cookie": cookie, "Origin": "https://attacker.example"})[0], 403)
+        restarted = WebChat(self.root)
+        port = restarted.start(0)
+        self.addCleanup(restarted.close)
+        with patch.object(restarted.server.RequestHandlerClass, "local_client", return_value=False):
+            def check():
+                c = http.client.HTTPConnection("127.0.0.1", port)
+                c.request("GET", "/", headers={"Cookie": cookie})
+                r = c.getresponse(); r.read(); c.close()
+                return r.status
+            self.assertEqual(check(), 200)
+            self.assertFalse(restarted.valid_browser_token("1.nonce.invalid"))
+            token = restarted.browser_token()
+            with patch("web_chat.time.time", return_value=time.time() + 181 * 86400):
+                self.assertFalse(restarted.valid_browser_token(token))
+            self.assertEqual(restarted.change_password({"current_password": "veyra",
+                                                       "new_password": "new-test-password"})[0], 200)
+            self.assertEqual(check(), 401)
+
     def test_default_password_and_reminder_survive_restart(self):
         restarted = WebChat(self.root)
         self.assertEqual(self.chat.network_password, "veyra")

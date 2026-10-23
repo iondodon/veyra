@@ -1,6 +1,10 @@
 """Local web chat, with authenticated access from other devices."""
 
 import base64
+import hashlib
+import hmac
+from http.cookies import SimpleCookie, CookieError
+import time
 from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ipaddress
@@ -26,6 +30,7 @@ EVENT_PREFIX = "VEYRA_EVENT "
 WEB_PORT = 3000
 WEB_URL = f"http://localhost:{WEB_PORT}"
 DEFAULT_PASSWORD = "veyra"
+REMEMBER_SECONDS = 180 * 24 * 60 * 60
 ASSETS = Path(__file__).resolve().parent
 
 
@@ -49,6 +54,11 @@ class WebChat:
             self.network_password = connection.execute(
                 "SELECT value FROM settings WHERE name = 'network_password'"
             ).fetchone()[0]
+            connection.execute("INSERT OR IGNORE INTO settings(name, value) VALUES ('browser_signing_key', ?)",
+                               (secrets.token_hex(32),))
+            self.browser_signing_key = connection.execute(
+                "SELECT value FROM settings WHERE name = 'browser_signing_key'"
+            ).fetchone()[0]
         self.database.chmod(0o600)
         self.lock = threading.RLock()
         self.process = None
@@ -59,6 +69,23 @@ class WebChat:
         self.server = None
         self.begin_session()
         self.dashboard = SystemDashboard(root)
+
+    def browser_token(self):
+        payload = f"{int(time.time()) + REMEMBER_SECONDS}.{secrets.token_hex(16)}"
+        return payload + "." + self.browser_signature(payload)
+
+    def browser_signature(self, payload):
+        return hmac.new(self.browser_signing_key.encode(),
+                        (self.network_password + "\0" + payload).encode(), hashlib.sha256).hexdigest()
+
+    def valid_browser_token(self, token):
+        try:
+            expires, nonce, signature = token.split(".")
+            if len(token) > 200 or not nonce or not int(time.time()) < int(expires) <= int(time.time()) + REMEMBER_SECONDS:
+                return False
+            return hmac.compare_digest(signature, self.browser_signature(expires + "." + nonce))
+        except (ValueError, TypeError):
+            return False
 
     def begin_session(self):
         with closing(sqlite3.connect(self.database)) as connection:
@@ -326,9 +353,18 @@ class WebChat:
             def authenticated(self):
                 if self.local_client():
                     return True
+                try:
+                    cookies = SimpleCookie(self.headers.get("Cookie", ""))
+                    token = cookies.get("veyra_browser")
+                    if token and chat.valid_browser_token(token.value):
+                        return True
+                except CookieError:
+                    pass
                 scheme, _, credentials = self.headers.get("Authorization", "").partition(" ")
                 expected = base64.b64encode(("veyra:" + chat.network_password).encode())
-                return scheme.lower() == "basic" and secrets.compare_digest(credentials.encode(), expected)
+                valid = scheme.lower() == "basic" and secrets.compare_digest(credentials.encode(), expected)
+                self.remember_browser = valid
+                return valid
 
             def respond(self, status, data, content_type="application/json; charset=utf-8"):
                 body = json.dumps(data).encode() if isinstance(data, dict) else data
@@ -346,6 +382,9 @@ class WebChat:
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.send_header("Referrer-Policy", "no-referrer")
                 self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+                if getattr(self, "remember_browser", False) and status < 400:
+                    self.send_header("Set-Cookie", "veyra_browser=" + chat.browser_token() +
+                                     f"; Max-Age={REMEMBER_SECONDS}; Path=/; HttpOnly; SameSite=Strict")
                 if status == 401:
                     self.send_header("WWW-Authenticate", 'Basic realm="Veyra", charset="UTF-8"')
                 self.end_headers()
