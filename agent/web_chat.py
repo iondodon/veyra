@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlsplit
 from images import validate_images, MAX_REQUEST_BYTES
 from system_dashboard import SystemDashboard
 from admin_diagnostics import AdminDiagnostics
+from video_share import serve as serve_videos
 
 import sys
 from api_credentials import CredentialError, CredentialStore, KEY_NAMES
@@ -390,7 +391,8 @@ class WebChat:
                 if status == 401:
                     self.send_header("WWW-Authenticate", 'Basic realm="Veyra", charset="UTF-8"')
                 self.end_headers()
-                self.wfile.write(body)
+                if self.command != "HEAD":
+                    self.wfile.write(body)
 
             def do_GET(self):
                 if not self.allowed_host():
@@ -398,6 +400,8 @@ class WebChat:
                 if not self.authenticated():
                     return self.respond(401, {"error": "Sign in with username veyra and your Veyra network password."})
                 parsed = urlsplit(self.path)
+                if parsed.path == "/videos" or parsed.path.startswith("/videos/"):
+                    return serve_videos(self)
                 if parsed.path == "/_health":
                     return self.respond(200, {"ready": chat.ready, "busy": chat.busy})
                 if parsed.path == "/api/app-version":
@@ -442,6 +446,11 @@ class WebChat:
                 filename, content_type = assets[parsed.path]
                 body = chat.assets[filename]
                 self.respond(200, body, content_type)
+
+            def do_HEAD(self):
+                if urlsplit(self.path).path.startswith("/videos/"):
+                    return self.do_GET()
+                self.send_error(405)
 
             def do_POST(self):
                 origin = self.headers.get("Origin")
