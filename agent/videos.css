@@ -1,20 +1,25 @@
-:root { color-scheme: dark; font-family: system-ui, sans-serif; background: #10151e; color: #edf2fa; }
-* { box-sizing: border-box; }
-body { margin: 0; }
-a { color: #a7cbff; text-underline-offset: .2em; }
-header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem; padding: 1.2rem max(1rem, calc((100vw - 1050px)/2)); border-bottom: 1px solid #334155; }
-header > a { font-weight: 750; font-size: 1.2rem; text-decoration: none; color: #fff; }
-nav { display: flex; flex-wrap: wrap; gap: 1.2rem; align-items: center; }
-main { max-width: 1050px; margin: auto; padding: 2rem 1rem 4rem; }
-h1 { font-size: clamp(1.5rem, 4vw, 2.4rem); overflow-wrap: anywhere; }
-p { color: #b8c5d9; line-height: 1.6; }
-.eyebrow { font-size: .8rem; letter-spacing: .16em; color: #a7cbff; }
-.library { list-style: none; padding: 0; display: grid; gap: .7rem; }
-.library a { display: flex; align-items: center; gap: 1rem; padding: 1.1rem; background: #1b2534; border: 1px solid #334155; border-radius: .75rem; text-decoration: none; overflow-wrap: anywhere; }
-.library a:hover, .button:hover { background: #273750; }
-.kind { font-size: .7rem; text-transform: uppercase; min-width: 3.5rem; color: #c7d8ef; }
-.button { display: inline-block; padding: .7rem 1rem; border: 1px solid #536981; border-radius: .5rem; text-decoration: none; }
-video { width: 100%; max-height: 72vh; background: #000; border-radius: .75rem; }
-audio { width: 100%; }
-.playback { margin-top: 1rem; justify-content: space-between; }
-a:focus-visible { outline: 3px solid #facc15; outline-offset: 4px; }
+/* Chat supplies the shared typography, palette, brand and navigation. */
+.videos-page { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+.videos-page header { height: auto; min-height: calc(80px + env(safe-area-inset-top)); padding-top: env(safe-area-inset-top); }
+.videos-page main { padding: 36px 32px max(48px, env(safe-area-inset-bottom)); }
+.videos-page h1 { overflow-wrap: anywhere; }
+.videos-page p { color: #6b6f60; font-size: 14px; line-height: 1.75; }
+.videos-page .eyebrow { font-size: 10px; color: #8a8c81; }
+.videos-page a:not(.brand):not(.dashboard-link) { color: #9d482b; text-underline-offset: 3px; }
+.videos-page .app-nav [aria-current] { color: #343c31; font-weight: 650; text-decoration-thickness: 2px; }
+.library { list-style: none; padding: 0; margin: 24px 0; display: grid; gap: 10px; }
+.library a { display: flex; align-items: center; gap: 16px; min-height: 64px; padding: 15px 19px; background: #fff; border: 1px solid #dfe1d5; border-radius: 14px; text-decoration: none; font-size: 14px; line-height: 1.6; }
+.videos-page .library a { color: #262723; }
+.library a:hover { background: #edeee7; border-color: #b3bea7; }
+.library a > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.kind { flex-shrink: 0; min-width: 48px; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #72756a; }
+.videos-page .button { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 10px 14px; border: 1px solid #dcded3; border-radius: 8px; background: white; color: #343c31; font-size: 12px; font-weight: 550; text-decoration: none; }
+.videos-page .button:hover { background: #edeee7; border-color: #b3bea7; }
+video { display: block; width: 100%; max-height: 72vh; margin-top: 24px; background: #000; border: 1px solid #dfe1d5; border-radius: 14px; }
+audio { display: block; width: 100%; margin-top: 24px; }
+.playback { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
+@media(max-width:600px) {
+  .videos-page header { min-height: calc(56px + env(safe-area-inset-top)); padding: calc(12px + env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 12px max(16px, env(safe-area-inset-left)); }
+  .videos-page main { padding: 22px max(16px, env(safe-area-inset-right)) max(32px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+  .library a { padding: 13px 15px; gap: 12px; }
+}

@@ -52,12 +52,17 @@ def natural_key(path):
 
 def page(title, content):
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
-            '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
             '<title>' + html.escape(title) + ' · Veyra</title>'
-            '<link rel="stylesheet" href="/videos.css"></head><body>'
-            '<header><a href="/">Veyra</a><nav aria-label="Navigation">'
-            '<a href="/">Chat</a><a href="/videos/">Videos</a>'
-            '<a href="/dashboard">Dashboard</a></nav></header><main>'
+            '<link rel="stylesheet" href="/chat.css">'
+            '<link rel="stylesheet" href="/videos.css"></head><body class="videos-page">'
+            '<header><a class="brand" href="/" aria-label="Veyra home">'
+            '<span class="mark">v</span>Veyra<span class="local">LOCAL</span></a>'
+            '<nav class="app-nav" aria-label="Navigation">'
+            '<a class="dashboard-link" href="/">Chat</a>'
+            '<a class="dashboard-link" href="/dashboard">Dashboard</a>'
+            '<a class="dashboard-link" href="/videos/" aria-current="page">Videos</a>'
+            '</nav></header><main id="video-content">'
             + content + '</main></body></html>').encode()
 
 

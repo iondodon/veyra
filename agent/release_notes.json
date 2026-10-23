@@ -1,6 +1,6 @@
 {
-  "summary": "Videos is now a built-in Veyra feature with a mobile-friendly library and an in-app media player.",
-  "instructions": "Tap Videos in the chat navigation, open a course folder, then choose a video. The player provides native playback, seeking and full-screen controls, plus Previous and Next links within the folder. On your iPhone use the same Veyra address and sign-in as chat; no separate port is needed. Lessons are sorted in numerical order. The library uses the existing course folder in Downloads and hides non-media files. Automated tests passed for player rendering, sorting, safe filenames, navigation, authentication, streaming byte ranges, HEAD requests and shared page updates, alongside all 32 web-chat tests. Actual iPhone playback has not been verified and depends on browser codec support; no transcoding is provided. No firewall or separate port 8090 server settings were changed.",
+  "summary": "The Videos library and player now match the chat design, using its shared typography, light palette, Veyra branding and navigation.",
+  "instructions": "Open Videos from the chat navigation, browse a folder and select a lesson. Both the library and player now use chat-consistent surfaces, buttons, spacing and focus indicators, with responsive layouts for phones and desktops. Playback, seeking and Previous/Next links are unchanged. Browser layout checks passed at 320, 390, 1024 and 1905 pixels; media HTTP/range/authentication tests and all 32 web-chat tests also passed. Actual iPhone playback has not been verified.",
   "links": [
     {
       "label": "Videos",
