@@ -1,0 +1,6 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Administrator diagnostics · Veyra</title><link rel="stylesheet" href="/dashboard.css"><script src="/admin.js" defer></script></head>
+<body><main style="max-width:900px;margin:auto;padding:24px"><nav><a href="/">Chat and Settings</a> · <a href="/dashboard">Dashboard</a></nav><h1>Administrator diagnostics</h1>
+<p>Available only at localhost on the computer running Veyra. Veyra stays unprivileged. This action uses the system’s authentication dialog to run <code>nft list ruleset</code> once as administrator. It does not change firewall rules or grant ongoing root access.</p>
+<p><strong>Never enter a password in chat or a web form.</strong> Enter it only in the operating system’s authentication prompt on this PC. A desktop polkit authentication agent must be running. Cancelling the prompt cancels the action.</p>
+<button id="inspect" type="button">Inspect firewall (system authentication)</button><p id="status" role="status"></p><pre id="output" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre><p>Results stay in memory until the next inspection or restart. They are not sent to the model automatically. Firewall rules can contain network addresses; review before sharing.</p></main></body></html>

@@ -1,10 +1,10 @@
 {
-  "summary": "Veyra now remembers browser sign-in across app and computer restarts.",
-  "instructions": "Sign in once with your Veyra network username and password. Keep cookies enabled and use the same browser and Veyra address: sign-in is remembered for up to 180 days. Restart Veyra or your PC and reopen that address to test. Clearing cookies, private browsing, expiry, or changing your password can require another login. Settings \u2192 Change password invalidates previous remembered logins. ChatGPT sign-in is separate and unchanged.",
+  "summary": "Added localhost-only administrator firewall diagnostics using the operating system authentication prompt. Veyra itself remains unprivileged.",
+  "instructions": "Open Settings \u2192 Administrator diagnostics, or open /admin using http://localhost:3000 on the Veyra PC. Click Inspect firewall and approve the operating system authentication dialog. This runs only nft list ruleset, never changes firewall rules, and never accepts a password in a web form or chat. Results stay in memory and are not automatically sent to the model. Tested fixed-command validation, duplicate prevention, authentication failure handling, localhost-only API access, and update injection. On this PC the live attempt failed with \u201cNo authentication agent found\u201d; a desktop polkit authentication agent is required before inspection can succeed. The video share still returns HTTP 200 locally, but the iPhone connectivity cause remains unconfirmed. Do not reuse the password posted in chat; change it through trusted system settings.",
   "links": [
     {
-      "label": "Chat and Settings",
-      "path": "/"
+      "label": "Administrator diagnostics (run from localhost)",
+      "path": "/admin"
     }
   ]
 }

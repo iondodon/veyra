@@ -25,6 +25,18 @@ class WebChatTests(unittest.TestCase):
         self.processes = []
         self.addCleanup(self.stop_agents)
 
+    def test_admin_routes(self):
+        status, page = self.request('GET', '/admin')
+        self.assertEqual(status, 200)
+        self.assertIn(b'/app-updates.js', page)
+        self.assertEqual(self.request('GET', '/api/admin')[0], 200)
+        self.assertEqual(self.request('POST', '/api/admin', {'command': 'id'})[0], 400)
+        remote = {'Host': f'8.8.8.8:{self.port}',
+                  'Origin': f'http://8.8.8.8:{self.port}',
+                  'Authorization': 'Basic ' + base64.b64encode(b'veyra:veyra').decode()}
+        self.assertEqual(self.request('GET', '/api/admin', headers=remote)[0], 403)
+        self.assertEqual(self.request('POST', '/api/admin', {'action': 'firewall'}, remote)[0], 403)
+
     def test_markdown_assets_are_served_and_versioned(self):
         status, page = self.request("GET", "/")
         self.assertEqual(status, 200)
