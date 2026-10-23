@@ -42,7 +42,7 @@ class WebChat:
         self.assets = {filename: (ASSETS / filename).read_bytes()
                        for filename in ("chat.html", "chat.js", "chat.css", "app_updates.js",
                                         "marked.js", "purify.js", "chat-markdown.js",
-                                        "dashboard.html", "dashboard.js", "dashboard.css", "admin.html", "admin.js")}
+                                        "videos.css", "dashboard.html", "dashboard.js", "dashboard.css", "admin.html", "admin.js")}
         directory = Path(root) / "state/chat"
         directory.mkdir(parents=True, exist_ok=True)
         directory.chmod(0o700)
@@ -429,6 +429,7 @@ class WebChat:
                         return self.respond(500, {"error": "Veyra couldn't read the saved API key settings."})
                 assets = {
                     "/": ("chat.html", "text/html; charset=utf-8"),
+                    "/videos.css": ("videos.css", "text/css; charset=utf-8"),
                     "/chat.css": ("chat.css", "text/css; charset=utf-8"),
                     "/admin": ("admin.html", "text/html; charset=utf-8"),
                     "/admin.js": ("admin.js", "text/javascript; charset=utf-8"),

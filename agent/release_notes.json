@@ -1,9 +1,9 @@
 {
-  "summary": "Added a protected course-video browser on Veyra\u2019s existing port 3000, bypassing the unresolved port 8090 connection problem.",
-  "instructions": "On your iPhone open /videos/ at the same Veyra address used for chat (http://192.168.1.9:3000/videos/), or tap Course videos in the chat navigation. Open a course folder and tap an MP4 to play; try seeking within the video. Uses the existing Veyra network sign-in. The course folder was verified to exist with 385 MP4 files. Tested directory browsing, shared UI-update injection, range responses, HEAD, sign-in enforcement, missing files, and path restrictions; all 32 web-chat tests also passed. iPhone playback still needs your confirmation. No firewall rules changed, and the original 8090 cause remains unconfirmed. The separate unauthenticated port 8090 server and router forwarding were not changed; disable the forwarding if public sharing is not intended.",
+  "summary": "Videos is now a built-in Veyra feature with a mobile-friendly library and an in-app media player.",
+  "instructions": "Tap Videos in the chat navigation, open a course folder, then choose a video. The player provides native playback, seeking and full-screen controls, plus Previous and Next links within the folder. On your iPhone use the same Veyra address and sign-in as chat; no separate port is needed. Lessons are sorted in numerical order. The library uses the existing course folder in Downloads and hides non-media files. Automated tests passed for player rendering, sorting, safe filenames, navigation, authentication, streaming byte ranges, HEAD requests and shared page updates, alongside all 32 web-chat tests. Actual iPhone playback has not been verified and depends on browser codec support; no transcoding is provided. No firewall or separate port 8090 server settings were changed.",
   "links": [
     {
-      "label": "Course videos",
+      "label": "Videos",
       "path": "/videos/"
     }
   ]

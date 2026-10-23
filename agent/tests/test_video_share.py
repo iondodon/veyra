@@ -5,7 +5,7 @@ from urllib.request import urlopen, Request
 from urllib.error import HTTPError
 from unittest.mock import patch
 from web_chat import WebChat
-from video_share import resolve, byte_range
+from video_share import resolve, byte_range, browse, watch
 
 
 class VideoTests(unittest.TestCase):
@@ -23,6 +23,24 @@ class VideoTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 byte_range(value, 10)
 
+    def test_library_and_player(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ('Lesson 10.mp4', 'Lesson 2.mp4', 'Lesson 1.mp4',
+                         '<unsafe>.mp4', '.private.mp4', 'script.html'):
+                (root / name).write_bytes(b'video')
+            (root / 'outside.mp4').symlink_to('/tmp/elsewhere')
+            body = browse(root, root).decode()
+            self.assertLess(body.index('Lesson 2.mp4'), body.index('Lesson 10.mp4'))
+            self.assertNotIn('script.html', body)
+            self.assertNotIn('.private.mp4', body)
+            self.assertNotIn('outside.mp4', body)
+            self.assertIn('&lt;unsafe&gt;.mp4', body)
+            player = watch(root, root / 'Lesson 2.mp4').decode()
+            self.assertIn('Lesson%201.mp4?watch=1', player)
+            self.assertIn('Lesson%2010.mp4?watch=1', player)
+            self.assertNotIn('autoplay', player)
+
     def test_http(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / 'media'; root.mkdir()
@@ -37,6 +55,15 @@ class VideoTests(unittest.TestCase):
                         body = response.read()
                         self.assertIn(b'test.mp4', body)
                         self.assertIn(b'/app-updates.js', body)
+                    with urlopen(base + '/videos/test.mp4?watch=1') as response:
+                        player = response.read()
+                        self.assertIn(b'<video controls playsinline', player)
+                        self.assertIn(b'src="/videos/test.mp4"', player)
+                        self.assertIn(b'/app-updates.js', player)
+                        self.assertIn(b'/videos.css', player)
+                    with urlopen(base + '/videos.css') as response:
+                        self.assertIn('text/css', response.headers['Content-Type'])
+                        self.assertIn(b'video', response.read())
                     with urlopen(Request(base + '/videos/test.mp4', headers={'Range': 'bytes=2-4'})) as response:
                         self.assertEqual(response.status, 206)
                         self.assertEqual(response.read(), b'234')
